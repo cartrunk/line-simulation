@@ -831,12 +831,18 @@
                 this.pack_rate = 0.80;
                 this.recycle_rate = 0.10;
                 this.juice_rate = 0.10;
-                
+                this.partial_fruit_count = 0.0;
+                this.next_accumulator_id = 0;
+
                 this.pack_lbs = 0.0;
                 this.juice_lbs = 0.0;
                 this.recycle_lbs = 0.0;
                 this.recycle_buffer_mass_lbs = 0.0;
                 this.total_lbs_produced = 0.0;
+                this.cases_completed = 0;
+                this.pallets_completed = 0;
+                this.case_size_lbs = 30.0;
+                this.pallet_size_cases = 60;
                 
                 this.upstream_speed_multiplier = 1.0;
 
@@ -911,13 +917,15 @@
                 this.last_grade_output = grade_output;
                 this.last_wash_output = wash_output;
                 
-                // Singulate
+                // Singulate (with fractional fruit accumulation)
                 let num_fruits = 0;
                 if (singulator_input > 0) {
                     const max_fruit_rate = this.num_lanes * 5.0;
                     const input_fruit_rate = singulator_input / this.fruit_weight_lbs;
                     const actual_fruit_rate = Math.min(input_fruit_rate, max_fruit_rate);
-                    num_fruits = Math.floor(actual_fruit_rate * dt_sec);
+                    this.partial_fruit_count += actual_fruit_rate * dt_sec;
+                    num_fruits = Math.floor(this.partial_fruit_count);
+                    this.partial_fruit_count -= num_fruits;
                 }
                 
                 for (let i = 0; i < num_fruits; i++) {
@@ -942,24 +950,51 @@
                 this.recycle_buffer_mass_lbs = recycle_mass;
                 this.last_num_fruits = num_fruits;
 
-                // Route to accumulators
+                // Route to accumulators (round-robin)
                 for (let i = 0; i < num_fruits; i++) {
                     if ((i * 0.618) % 1.0 < this.pack_rate) {
-                        const acc_id = i % 4;
+                        const acc_id = this.next_accumulator_id % 4;
+                        this.next_accumulator_id++;
                         this.accumulators[acc_id].fill(this.fruit_weight_lbs);
                     }
                 }
                 
-                // Baggers produce
+                // PDGs draw from accumulators and feed baggers
                 let total_pdg_demand = 0.0;
-                for (const bagger of this.baggers) {
-                    const demand = bagger.demand_lbs_per_sec() * dt_sec;
-                    total_pdg_demand += bagger.demand_lbs_per_sec();
-                    bagger.produce(demand, dt_sec);
-                    this.total_lbs_produced += bagger.bags_completed * bagger.bag_size_lbs;
+                for (let pdg_id = 0; pdg_id < 4; pdg_id++) {
+                    const acc = this.accumulators[pdg_id];
+                    const b1 = this.baggers[2 * pdg_id];
+                    const b2 = this.baggers[2 * pdg_id + 1];
+
+                    // Snapshot bags before production
+                    const prev_b1 = b1.bags_completed;
+                    const prev_b2 = b2.bags_completed;
+
+                    const total_demand = (b1.demand_lbs_per_sec() + b2.demand_lbs_per_sec()) * dt_sec;
+                    total_pdg_demand += b1.demand_lbs_per_sec() + b2.demand_lbs_per_sec();
+
+                    // Draw from accumulator
+                    const from_acc = acc.draw(total_demand);
+                    let remaining = from_acc;
+
+                    // Distribute to baggers
+                    const share1 = Math.min(b1.demand_lbs_per_sec() * dt_sec, remaining);
+                    b1.produce(share1, dt_sec);
+                    remaining -= share1;
+                    const share2 = Math.min(b2.demand_lbs_per_sec() * dt_sec, remaining);
+                    b2.produce(share2, dt_sec);
+
+                    // Track only NEW bags produced this step
+                    const new_b1 = b1.bags_completed - prev_b1;
+                    const new_b2 = b2.bags_completed - prev_b2;
+                    this.total_lbs_produced += new_b1 * b1.bag_size_lbs + new_b2 * b2.bag_size_lbs;
                 }
                 this.last_pdg_demand = total_pdg_demand;
-                
+
+                // Cases and pallets from cumulative output
+                this.cases_completed = Math.floor(this.total_lbs_produced / this.case_size_lbs);
+                this.pallets_completed = Math.floor(this.cases_completed / this.pallet_size_cases);
+
                 // Update control signal
                 this.update_control_signal();
                 
@@ -1045,9 +1080,14 @@
             
             for (const bagger of sim.baggers) {
                 bagger.bags_completed = 0;
+                bagger.partial_bag_lbs = 0.0;
             }
             
             sim.history = { time: [], throughput: [], acc_fill: [] };
+            sim.partial_fruit_count = 0.0;
+            sim.next_accumulator_id = 0;
+            sim.cases_completed = 0;
+            sim.pallets_completed = 0;
             sim.last_bin_mass_dumped = 0.0;
             sim.last_metering_output = 0.0;
             sim.last_unstack_output = 0.0;
@@ -1177,8 +1217,10 @@
             
             document.getElementById('packLbs').textContent = state.pack_lbs.toFixed(1) + ' lbs';
             document.getElementById('juiceLbs').textContent = state.juice_lbs.toFixed(1) + ' lbs';
-            document.getElementById('totalOutput').textContent = 
+            document.getElementById('totalOutput').textContent =
                 state.total_lbs_produced.toFixed(1) + ' lbs';
+            document.getElementById('casesCompleted').textContent = sim.cases_completed;
+            document.getElementById('palletsCompleted').textContent = sim.pallets_completed;
             
             // Flow path visualization
             updateFlowPath();

@@ -229,6 +229,8 @@ class ProductionLineSimulator:
         self.lanes: List[Lane] = [Lane(i) for i in range(self.num_lanes)]
         self.fruit_per_lane_per_sec = 5.0  # Base rate
         self.recycle_buffer_mass_lbs = 0.0
+        self.partial_fruit_count = 0.0  # Fractional fruit accumulator
+        self.next_accumulator_id = 0  # Round-robin counter for even distribution
         
         # Camera classification
         self.pack_rate = 0.80  # % → pack
@@ -375,8 +377,11 @@ class ProductionLineSimulator:
         max_fruit_rate = self.num_lanes * self.fruit_per_lane_per_sec
         input_fruit_rate = singulator_input / self.fruit_weight_lbs
         actual_fruit_rate = min(input_fruit_rate, max_fruit_rate)
-        
-        num_fruits = int(actual_fruit_rate * dt_sec)
+
+        # Accumulate fractional fruit across steps
+        self.partial_fruit_count += actual_fruit_rate * dt_sec
+        num_fruits = int(self.partial_fruit_count)
+        self.partial_fruit_count -= num_fruits
         output_mass = num_fruits * self.fruit_weight_lbs
         
         # Create fruit objects, assign evenly to lanes
@@ -419,10 +424,11 @@ class ProductionLineSimulator:
         return recycle_mass, classified_fruits
 
     def _route_fruits_to_accumulators(self, classified_fruits: List[Fruit]) -> None:
-        """Route classified fruit to accumulators or juice"""
+        """Route classified fruit to accumulators (round-robin) or juice"""
         for fruit in classified_fruits:
             if fruit.grade == FruitGrade.PACK:
-                acc_id = fruit.lane_id % len(self.accumulators)
+                acc_id = self.next_accumulator_id % len(self.accumulators)
+                self.next_accumulator_id += 1
                 self.accumulators[acc_id].fill(fruit.weight_lbs)
                 self.pack_lbs += fruit.weight_lbs
             elif fruit.grade == FruitGrade.JUICE:
