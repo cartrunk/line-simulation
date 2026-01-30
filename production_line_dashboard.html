@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Citrus Production Line Simulator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0e27;
+            color: #e8eaed;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #4da6ff;
+            padding-bottom: 20px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 5px;
+            color: #4da6ff;
+        }
+        
+        .header p {
+            color: #888;
+            font-size: 0.95em;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: #1a1f3a;
+            border: 1px solid #2d3561;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        }
+        
+        .card h2 {
+            color: #4da6ff;
+            font-size: 1.3em;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .card-icon {
+            font-size: 1.5em;
+        }
+        
+        .control-group {
+            margin-bottom: 15px;
+        }
+        
+        .control-label {
+            display: block;
+            margin-bottom: 5px;
+            color: #a0a6c8;
+            font-size: 0.9em;
+            font-weight: 500;
+        }
+        
+        input[type="range"],
+        input[type="number"],
+        select,
+        button {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #2d3561;
+            background: #0f1428;
+            color: #e8eaed;
+            border-radius: 4px;
+            font-size: 0.95em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        input[type="range"] {
+            height: 6px;
+            padding: 0;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #4da6ff;
+            cursor: pointer;
+        }
+        
+        input[type="range"]::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #4da6ff;
+            cursor: pointer;
+            border: none;
+        }
+        
+        button {
+            background: #4da6ff;
+            color: #0a0e27;
+            font-weight: 600;
+            border: none;
+            margin-top: 5px;
+        }
+        
+        button:hover {
+            background: #6bb6ff;
+        }
+        
+        button.active {
+            background: #2d7a2d;
+        }
+        
+        button.stop {
+            background: #8b3a3a;
+        }
+        
+        .metric-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #4da6ff;
+            margin: 10px 0;
+        }
+        
+        .metric-unit {
+            color: #888;
+            font-size: 0.7em;
+            margin-left: 5px;
+        }
+        
+        .status-bar {
+            display: flex;
+            height: 20px;
+            background: #0f1428;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        
+        .status-fill {
+            background: linear-gradient(90deg, #4da6ff, #6bb6ff);
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+        
+        .status-fill.warning {
+            background: linear-gradient(90deg, #ffb366, #ff8c42);
+        }
+        
+        .status-fill.critical {
+            background: linear-gradient(90deg, #ff6b6b, #ff4444);
+        }
+        
+        .status-label {
+            display: flex;
+            justify-content: space-between;
+            color: #888;
+            font-size: 0.8em;
+            margin-bottom: 3px;
+        }
+        
+        .lane-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+            margin: 10px 0;
+        }
+        
+        .lane-box {
+            background: #0f1428;
+            border: 1px solid #2d3561;
+            border-radius: 4px;
+            padding: 8px;
+            text-align: center;
+            font-size: 0.85em;
+        }
+        
+        .lane-box.active {
+            border-color: #4da6ff;
+            background: #1a2847;
+        }
+        
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 300px;
+            background: #1a1f3a;
+            border: 1px solid #2d3561;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        }
+        
+        .bagger-row {
+            display: grid;
+            grid-template-columns: 80px 1fr 80px;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+            padding: 10px;
+            background: #0f1428;
+            border-radius: 4px;
+        }
+        
+        .bagger-label {
+            font-weight: 500;
+        }
+        
+        .bagger-speed {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .bagger-speed input[type="range"] {
+            flex: 1;
+        }
+        
+        .toggle-btn {
+            width: 60px;
+            padding: 6px;
+            font-size: 0.8em;
+        }
+        
+        .toggle-btn.inactive {
+            background: #4a4a4a;
+        }
+        
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin: 10px 0;
+        }
+        
+        .info-item {
+            padding: 10px;
+            background: #0f1428;
+            border-radius: 4px;
+            border-left: 3px solid #4da6ff;
+        }
+        
+        .info-label {
+            color: #888;
+            font-size: 0.85em;
+        }
+        
+        .info-value {
+            font-weight: bold;
+            color: #e8eaed;
+            margin-top: 3px;
+        }
+        
+        .timeline {
+            margin-top: 10px;
+            padding: 10px;
+            background: #0f1428;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        
+        .timeline-item {
+            padding: 5px 0;
+            color: #888;
+        }
+        
+        .timeline-item.event {
+            color: #4da6ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🏭 Citrus Production Line Simulator</h1>
+        <p>Demand-driven, accumulator-controlled mass-flow system</p>
+    </div>
+    
+    <div class="container">
+        <!-- CONTROL PANEL -->
+        <div class="grid">
+            <!-- Global Controls -->
+            <div class="card">
+                <h2><span class="card-icon">⚙️</span> Global Controls</h2>
+                
+                <div class="control-group">
+                    <label class="control-label">Control Mode</label>
+                    <select id="controlMode" onchange="setControlMode(this.value)">
+                        <option value="auto">AUTO (Accumulator-Driven)</option>
+                        <option value="manual">MANUAL (Speed %)</option>
+                    </select>
+                </div>
+                
+                <div class="control-group">
+                    <button id="playBtn" onclick="toggleSimulation()">▶️ Start Simulation</button>
+                </div>
+                
+                <div class="control-group">
+                    <button onclick="resetSimulation()">🔄 Reset</button>
+                </div>
+                
+                <div class="control-group">
+                    <label class="control-label">Simulation Speed</label>
+                    <input type="range" id="simSpeed" min="0.1" max="5" step="0.1" value="1" onchange="updateSimSpeed(this.value)">
+                    <div id="speedLabel" style="color: #888; font-size: 0.85em; margin-top: 3px;">1x</div>
+                </div>
+                
+                <div class="timeline">
+                    <div>⏱️ Time: <strong id="timeDisplay">0.0s</strong></div>
+                </div>
+            </div>
+            
+            <!-- Bin Management -->
+            <div class="card">
+                <h2><span class="card-icon">📦</span> Bin Management</h2>
+                
+                <div class="control-group">
+                    <label class="control-label">Load Bin (lbs)</label>
+                    <input type="number" id="binWeight" value="750" min="600" max="900">
+                    <button onclick="loadNewBin()">Load Bin</button>
+                </div>
+                
+                <div class="control-group">
+                    <label class="control-label">Bin Dump Speed (%)</label>
+                    <input type="range" id="binSpeed" min="0" max="100" value="100" onchange="setBinSpeed(this.value)">
+                    <div id="binSpeedLabel" style="color: #888; font-size: 0.85em; margin-top: 3px;">100%</div>
+                </div>
+                
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Active Bin</div>
+                        <div class="info-value" id="activeBinLbs">0.0 lbs</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Bins Completed</div>
+                        <div class="info-value" id="binsCompleted">0</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- System Status -->
+            <div class="card">
+                <h2><span class="card-icon">📊</span> System Status</h2>
+                
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Speed Multiplier</div>
+                        <div class="info-value" id="speedMult">1.0</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Avg Acc. Fill</div>
+                        <div class="info-value" id="avgAccFill">0%</div>
+                    </div>
+                </div>
+                
+                <div class="control-label">Accumulator Status</div>
+                <div id="accumulatorBars"></div>
+            </div>
+        </div>
+        
+        <!-- ACCUMULATOR DETAILS -->
+        <div class="grid">
+            <div class="card" id="accumulatorCards"></div>
+        </div>
+        
+        <!-- BAGGER CONTROLS -->
+        <div class="card">
+            <h2><span class="card-icon">👜</span> Bagger Controls & Status</h2>
+            <div id="baggerControls"></div>
+        </div>
+        
+        <!-- LANE STATUS -->
+        <div class="card">
+            <h2><span class="card-icon">🛣️</span> Singulator Lane Status</h2>
+            <div class="lane-grid" id="laneGrid"></div>
+        </div>
+        
+        <!-- CHARTS -->
+        <div class="charts-grid">
+            <div class="chart-container">
+                <canvas id="metricsChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <canvas id="accumulatorChart"></canvas>
+            </div>
+        </div>
+        
+        <!-- PRODUCTION METRICS -->
+        <div class="grid">
+            <div class="card">
+                <h2><span class="card-icon">📈</span> Production Metrics</h2>
+                
+                <div class="metric-value" id="throughputValue">0.0<span class="metric-unit">lbs/hr</span></div>
+                
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Pack Production</div>
+                        <div class="info-value" id="packLbs">0.0 lbs</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Juice Stream</div>
+                        <div class="info-value" id="juiceLbs">0.0 lbs</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2><span class="card-icon">📦</span> Case & Pallet Production</h2>
+                
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Total Output</div>
+                        <div class="info-value" id="totalOutput">0.0 lbs</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Cases (30 lbs)</div>
+                        <div class="info-value" id="casesCompleted">0</div>
+                    </div>
+                </div>
+                
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Pallets (60 cases)</div>
+                        <div class="info-value" id="palletsCompleted">0</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Bagger Utilization</div>
+                        <div class="info-value" id="baggerUtil">0%</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // ====================================================================
+        // SIMULATOR ENGINE (embedded Python logic in JS)
+        // ====================================================================
+        
+        class Fruit {
+            constructor(weight_lbs, grade, lane_id, created_at_sec) {
+                this.weight_lbs = weight_lbs;
+                this.grade = grade;
+                this.lane_id = lane_id;
+                this.created_at_sec = created_at_sec;
+            }
+        }
+        
+        class Lane {
+            constructor(lane_id) {
+                this.lane_id = lane_id;
+                this.buffer = [];
+                this.buffer_capacity = 720;
+                this.scan_time_sec = 1.0;
+            }
+            
+            add_fruit(fruit) {
+                if (this.buffer.length < this.buffer_capacity) {
+                    this.buffer.push(fruit);
+                }
+            }
+            
+            utilization_pct() {
+                return 100.0 * this.buffer.length / this.buffer_capacity;
+            }
+        }
+        
+        class Accumulator {
+            constructor(acc_id) {
+                this.accumulator_id = acc_id;
+                this.capacity_lbs = 3600.0;
+                this.current_fill_lbs = 0.0;
+            }
+            
+            fill(mass_lbs) {
+                this.current_fill_lbs = Math.min(
+                    this.current_fill_lbs + mass_lbs,
+                    this.capacity_lbs
+                );
+            }
+            
+            draw(demand_lbs) {
+                const drawn = Math.min(demand_lbs, this.current_fill_lbs);
+                this.current_fill_lbs -= drawn;
+                return drawn;
+            }
+            
+            fill_pct() {
+                return 100.0 * this.current_fill_lbs / this.capacity_lbs;
+            }
+        }
+        
+        class Bagger {
+            constructor(bagger_id, pdg_id, bag_size_lbs) {
+                this.bagger_id = bagger_id;
+                this.pdg_id = pdg_id;
+                this.bag_size_lbs = bag_size_lbs;
+                this.max_speed_bags_per_min = 30.0;
+                this.manual_speed_pct = 100.0;
+                this.active = true;
+                this.bags_completed = 0;
+            }
+            
+            demand_lbs_per_sec() {
+                if (!this.active) return 0.0;
+                const bags_per_sec = (this.max_speed_bags_per_min / 60.0) *
+                    (this.manual_speed_pct / 100.0);
+                return bags_per_sec * this.bag_size_lbs;
+            }
+            
+            produce(available_mass_lbs, dt_sec) {
+                const demand = this.demand_lbs_per_sec() * dt_sec;
+                const consumed = Math.min(demand, available_mass_lbs);
+                if (this.bag_size_lbs > 0) {
+                    this.bags_completed += Math.floor(consumed / this.bag_size_lbs);
+                }
+                return consumed;
+            }
+        }
+        
+        class ProductionLineSimulator {
+            constructor() {
+                this.current_time_sec = 0.0;
+                this.dt_sec = 0.1;
+                this.control_mode = 'auto';
+                
+                this.active_bin = null;
+                this.bins_completed = 0;
+                this.bin_dump_rate_lbs_per_sec = 50.0;
+                this.manual_bin_speed_pct = 100.0;
+                
+                this.num_lanes = 10;
+                this.lanes = [];
+                for (let i = 0; i < this.num_lanes; i++) {
+                    this.lanes.push(new Lane(i));
+                }
+                
+                this.accumulators = [];
+                for (let i = 0; i < 4; i++) {
+                    this.accumulators.push(new Accumulator(i));
+                }
+                
+                this.baggers = [];
+                const bag_sizes = [1.0, 2.0, 3.0, 5.0];
+                for (let pdg_id = 0; pdg_id < 4; pdg_id++) {
+                    const b1 = new Bagger(2*pdg_id, pdg_id, bag_sizes[pdg_id]);
+                    const b2 = new Bagger(2*pdg_id + 1, pdg_id, bag_sizes[pdg_id]);
+                    this.baggers.push(b1, b2);
+                }
+                
+                this.fruit_weight_lbs = 0.21;
+                this.pack_rate = 0.80;
+                this.recycle_rate = 0.10;
+                this.juice_rate = 0.10;
+                
+                this.pack_lbs = 0.0;
+                this.juice_lbs = 0.0;
+                this.recycle_lbs = 0.0;
+                this.recycle_buffer_mass_lbs = 0.0;
+                this.total_lbs_produced = 0.0;
+                
+                this.upstream_speed_multiplier = 1.0;
+                
+                this.history = {
+                    time: [],
+                    throughput: [],
+                    acc_fill: []
+                };
+            }
+            
+            compute_upstream_speed_multiplier() {
+                const avg_fill_pct = this.accumulators.reduce((s, a) => s + a.fill_pct(), 0) / 4;
+                
+                if (avg_fill_pct < 20) return 1.0;
+                else if (avg_fill_pct < 50) return 0.8;
+                else if (avg_fill_pct < 80) return 0.5;
+                else return 0.0;
+            }
+            
+            update_control_signal() {
+                if (this.control_mode === 'auto') {
+                    this.upstream_speed_multiplier = this.compute_upstream_speed_multiplier();
+                } else {
+                    // Manual mode: use bin speed pct
+                    this.upstream_speed_multiplier = this.manual_bin_speed_pct / 100.0;
+                }
+            }
+            
+            step(dt_sec) {
+                this.dt_sec = dt_sec;
+                
+                // Dump bin
+                let bin_mass_dumped = 0.0;
+                if (this.active_bin) {
+                    const dump_rate = this.bin_dump_rate_lbs_per_sec *
+                        (this.manual_bin_speed_pct / 100.0) *
+                        this.upstream_speed_multiplier;
+                    
+                    bin_mass_dumped = Math.min(dump_rate * dt_sec, this.active_bin);
+                    this.active_bin -= bin_mass_dumped;
+                    
+                    if (this.active_bin <= 0) {
+                        this.bins_completed++;
+                        this.active_bin = null;
+                    }
+                }
+                
+                // Simple flow through components (no delay/yield for MVP)
+                const metering_output = bin_mass_dumped;
+                const singulator_input = metering_output + this.recycle_buffer_mass_lbs;
+                
+                // Singulate
+                let num_fruits = 0;
+                if (singulator_input > 0) {
+                    const max_fruit_rate = this.num_lanes * 5.0;
+                    const input_fruit_rate = singulator_input / this.fruit_weight_lbs;
+                    const actual_fruit_rate = Math.min(input_fruit_rate, max_fruit_rate);
+                    num_fruits = Math.floor(actual_fruit_rate * dt_sec);
+                }
+                
+                for (let i = 0; i < num_fruits; i++) {
+                    const lane_id = i % this.num_lanes;
+                    const fruit = new Fruit('pack', 'pack', lane_id, this.current_time_sec);
+                    this.lanes[lane_id].add_fruit(fruit);
+                }
+                
+                // Classify fruit
+                let recycle_mass = 0.0;
+                for (let i = 0; i < num_fruits; i++) {
+                    const rand_val = (i * 0.618) % 1.0;
+                    if (rand_val < this.pack_rate) {
+                        this.pack_lbs += this.fruit_weight_lbs;
+                    } else if (rand_val < this.pack_rate + this.recycle_rate) {
+                        recycle_mass += this.fruit_weight_lbs;
+                    } else {
+                        this.juice_lbs += this.fruit_weight_lbs;
+                    }
+                }
+                
+                this.recycle_buffer_mass_lbs = recycle_mass;
+                
+                // Route to accumulators
+                for (let i = 0; i < num_fruits; i++) {
+                    if ((i * 0.618) % 1.0 < this.pack_rate) {
+                        const acc_id = i % 4;
+                        this.accumulators[acc_id].fill(this.fruit_weight_lbs);
+                    }
+                }
+                
+                // Baggers produce
+                for (const bagger of this.baggers) {
+                    const demand = bagger.demand_lbs_per_sec() * dt_sec;
+                    bagger.produce(demand, dt_sec);
+                    this.total_lbs_produced += bagger.bags_completed * bagger.bag_size_lbs;
+                }
+                
+                // Update control signal
+                this.update_control_signal();
+                
+                this.current_time_sec += dt_sec;
+                
+                // History
+                this.history.time.push(this.current_time_sec);
+                this.history.throughput.push(this.total_lbs_produced);
+                this.history.acc_fill.push(
+                    this.accumulators.reduce((s, a) => s + a.fill_pct(), 0) / 4
+                );
+            }
+            
+            load_bin(weight_lbs) {
+                this.active_bin = weight_lbs;
+            }
+            
+            get_state() {
+                return {
+                    time_sec: this.current_time_sec,
+                    control_mode: this.control_mode,
+                    upstream_speed_multiplier: this.upstream_speed_multiplier,
+                    active_bin_lbs: this.active_bin || 0,
+                    bins_completed: this.bins_completed,
+                    accumulators: this.accumulators.map(a => ({
+                        id: a.accumulator_id,
+                        fill_lbs: a.current_fill_lbs,
+                        fill_pct: a.fill_pct()
+                    })),
+                    baggers: this.baggers.map(b => ({
+                        id: b.bagger_id,
+                        pdg: b.pdg_id,
+                        bag_size: b.bag_size_lbs,
+                        active: b.active,
+                        speed_pct: b.manual_speed_pct,
+                        bags_completed: b.bags_completed
+                    })),
+                    lanes: this.lanes.map(l => ({
+                        id: l.lane_id,
+                        buffer_fill: l.buffer.length,
+                        utilization_pct: l.utilization_pct()
+                    })),
+                    pack_lbs: this.pack_lbs,
+                    juice_lbs: this.juice_lbs,
+                    total_lbs_produced: this.total_lbs_produced
+                };
+            }
+        }
+        
+        // ====================================================================
+        // UI CONTROLLER
+        // ====================================================================
+        
+        const sim = new ProductionLineSimulator();
+        let simRunning = false;
+        let simSpeedMultiplier = 1.0;
+        let metricsChart, accumulatorChart;
+        
+        function toggleSimulation() {
+            simRunning = !simRunning;
+            const btn = document.getElementById('playBtn');
+            btn.textContent = simRunning ? '⏸️ Pause' : '▶️ Start';
+            btn.classList.toggle('active', simRunning);
+        }
+        
+        function resetSimulation() {
+            sim.current_time_sec = 0.0;
+            sim.active_bin = null;
+            sim.bins_completed = 0;
+            sim.pack_lbs = 0.0;
+            sim.juice_lbs = 0.0;
+            sim.total_lbs_produced = 0.0;
+            sim.recycle_buffer_mass_lbs = 0.0;
+            sim.upstream_speed_multiplier = 1.0;
+            
+            for (const acc of sim.accumulators) {
+                acc.current_fill_lbs = 0.0;
+            }
+            
+            for (const lane of sim.lanes) {
+                lane.buffer = [];
+            }
+            
+            for (const bagger of sim.baggers) {
+                bagger.bags_completed = 0;
+            }
+            
+            sim.history = { time: [], throughput: [], acc_fill: [] };
+            
+            simRunning = false;
+            document.getElementById('playBtn').textContent = '▶️ Start';
+            updateUI();
+        }
+        
+        function loadNewBin() {
+            const weight = parseFloat(document.getElementById('binWeight').value) || 750;
+            sim.load_bin(weight);
+            updateUI();
+        }
+        
+        function setBinSpeed(value) {
+            sim.manual_bin_speed_pct = parseFloat(value);
+            document.getElementById('binSpeedLabel').textContent = value + '%';
+        }
+        
+        function setControlMode(mode) {
+            sim.control_mode = mode;
+        }
+        
+        function updateSimSpeed(value) {
+            simSpeedMultiplier = parseFloat(value);
+            document.getElementById('speedLabel').textContent = value + 'x';
+        }
+        
+        function setBaggerSpeed(bagger_id, speed_pct) {
+            const bagger = sim.baggers.find(b => b.bagger_id === bagger_id);
+            if (bagger) bagger.manual_speed_pct = speed_pct;
+        }
+        
+        function toggleBagger(bagger_id) {
+            const bagger = sim.baggers.find(b => b.bagger_id === bagger_id);
+            if (bagger) {
+                bagger.active = !bagger.active;
+                updateUI();
+            }
+        }
+        
+        function updateUI() {
+            const state = sim.get_state();
+            
+            // Time
+            document.getElementById('timeDisplay').textContent = state.time_sec.toFixed(1) + 's';
+            
+            // Bin status
+            document.getElementById('activeBinLbs').textContent = 
+                (state.active_bin_lbs || 0).toFixed(1) + ' lbs';
+            document.getElementById('binsCompleted').textContent = state.bins_completed;
+            
+            // System status
+            document.getElementById('speedMult').textContent = 
+                state.upstream_speed_multiplier.toFixed(2);
+            
+            const avg_acc_fill = state.accumulators.reduce((s, a) => s + a.fill_pct, 0) / 4;
+            document.getElementById('avgAccFill').textContent = avg_acc_fill.toFixed(0) + '%';
+            
+            // Accumulator bars
+            const accBarsHtml = state.accumulators.map(acc => {
+                const fillPct = acc.fill_pct;
+                let fillClass = '';
+                if (fillPct > 80) fillClass = 'critical';
+                else if (fillPct > 50) fillClass = 'warning';
+                
+                return `
+                    <div>
+                        <div class="status-label">
+                            <span>Acc ${acc.id}</span>
+                            <span>${fillPct.toFixed(0)}%</span>
+                        </div>
+                        <div class="status-bar">
+                            <div class="status-fill ${fillClass}" style="width: ${fillPct}%"></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            document.getElementById('accumulatorBars').innerHTML = accBarsHtml;
+            
+            // Lanes
+            const laneHtml = state.lanes.map(lane => {
+                const util = lane.utilization_pct;
+                const className = util > 50 ? 'active' : '';
+                return `<div class="lane-box ${className}">L${lane.id}<br>${util.toFixed(0)}%</div>`;
+            }).join('');
+            document.getElementById('laneGrid').innerHTML = laneHtml;
+            
+            // Baggers
+            const baggerHtml = state.baggers.map(b => {
+                const btnClass = b.active ? 'toggle-btn' : 'toggle-btn inactive';
+                return `
+                    <div class="bagger-row">
+                        <div class="bagger-label">B${b.id}</div>
+                        <div class="bagger-speed">
+                            <input type="range" min="0" max="100" value="${b.speed_pct}"
+                                onchange="setBaggerSpeed(${b.id}, this.value)">
+                            <span style="width: 40px; text-align: right;">${b.speed_pct.toFixed(0)}%</span>
+                        </div>
+                        <button class="${btnClass}" onclick="toggleBagger(${b.id})">
+                            ${b.active ? 'ON' : 'OFF'}
+                        </button>
+                    </div>
+                `;
+            }).join('');
+            document.getElementById('baggerControls').innerHTML = baggerHtml;
+            
+            // Production metrics
+            const throughput = state.total_lbs_produced > 0 && state.time_sec > 0
+                ? (state.total_lbs_produced / state.time_sec) * 3600
+                : 0;
+            document.getElementById('throughputValue').innerHTML = 
+                throughput.toFixed(1) + '<span class="metric-unit">lbs/hr</span>';
+            
+            document.getElementById('packLbs').textContent = state.pack_lbs.toFixed(1) + ' lbs';
+            document.getElementById('juiceLbs').textContent = state.juice_lbs.toFixed(1) + ' lbs';
+            document.getElementById('totalOutput').textContent = 
+                state.total_lbs_produced.toFixed(1) + ' lbs';
+            
+            // Charts update
+            updateCharts();
+        }
+        
+        function updateCharts() {
+            // Metrics chart
+            if (metricsChart) {
+                metricsChart.data.labels = sim.history.time.map(t => t.toFixed(1));
+                metricsChart.data.datasets[0].data = sim.history.throughput;
+                metricsChart.update('none');
+            }
+            
+            // Accumulator chart
+            if (accumulatorChart) {
+                accumulatorChart.data.labels = sim.history.time.map(t => t.toFixed(1));
+                accumulatorChart.data.datasets[0].data = sim.history.acc_fill;
+                accumulatorChart.update('none');
+            }
+        }
+        
+        function animationLoop() {
+            if (simRunning) {
+                for (let i = 0; i < simSpeedMultiplier; i++) {
+                    sim.step(0.01);
+                }
+                updateUI();
+            }
+            requestAnimationFrame(animationLoop);
+        }
+        
+        // Initialize charts
+        function initCharts() {
+            const chartOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { labels: { color: '#888' } }
+                },
+                scales: {
+                    x: { ticks: { color: '#888' }, grid: { color: '#2d3561' } },
+                    y: { ticks: { color: '#888' }, grid: { color: '#2d3561' } }
+                }
+            };
+            
+            metricsChart = new Chart(document.getElementById('metricsChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Throughput (lbs)',
+                        data: [],
+                        borderColor: '#4da6ff',
+                        backgroundColor: 'rgba(77, 166, 255, 0.1)',
+                        tension: 0.1
+                    }]
+                },
+                options: chartOptions
+            });
+            
+            accumulatorChart = new Chart(document.getElementById('accumulatorChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Avg Accumulator Fill (%)',
+                        data: [],
+                        borderColor: '#ff8c42',
+                        backgroundColor: 'rgba(255, 140, 66, 0.1)',
+                        tension: 0.1
+                    }]
+                },
+                options: chartOptions
+            });
+        }
+        
+        // Startup
+        window.addEventListener('load', () => {
+            initCharts();
+            updateUI();
+            animationLoop();
+        });
+    </script>
+</body>
+</html>
