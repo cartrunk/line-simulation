@@ -771,20 +771,24 @@
                 this.manual_speed_pct = 100.0;
                 this.active = true;
                 this.bags_completed = 0;
+                this.partial_bag_lbs = 0.0;
             }
-            
+
             demand_lbs_per_sec() {
                 if (!this.active) return 0.0;
                 const bags_per_sec = (this.max_speed_bags_per_min / 60.0) *
                     (this.manual_speed_pct / 100.0);
                 return bags_per_sec * this.bag_size_lbs;
             }
-            
+
             produce(available_mass_lbs, dt_sec) {
                 const demand = this.demand_lbs_per_sec() * dt_sec;
                 const consumed = Math.min(demand, available_mass_lbs);
                 if (this.bag_size_lbs > 0) {
-                    this.bags_completed += Math.floor(consumed / this.bag_size_lbs);
+                    this.partial_bag_lbs += consumed;
+                    const bags_produced = Math.floor(this.partial_bag_lbs / this.bag_size_lbs);
+                    this.partial_bag_lbs -= bags_produced * this.bag_size_lbs;
+                    this.bags_completed += bags_produced;
                 }
                 return consumed;
             }

@@ -123,25 +123,28 @@ class Bagger:
     
     active: bool = True
     bags_completed: int = 0
-    
+    partial_bag_lbs: float = 0.0  # Tracks sub-bag accumulation
+
     def demand_lbs_per_sec(self) -> float:
         """Current demand based on speed"""
         if not self.active:
             return 0.0
-        
+
         bags_per_sec = (self.max_speed_bags_per_min / 60.0) * \
                        (self.manual_speed_pct / 100.0)
         return bags_per_sec * self.bag_size_lbs
-    
+
     def produce(self, available_mass_lbs: float, dt_sec: float) -> float:
         """Produce bags from available mass, return mass consumed"""
         demand = self.demand_lbs_per_sec() * dt_sec
         consumed = min(demand, available_mass_lbs)
-        
+
         if self.bag_size_lbs > 0:
-            bags_produced = consumed / self.bag_size_lbs
-            self.bags_completed += int(bags_produced)
-        
+            self.partial_bag_lbs += consumed
+            bags_produced = int(self.partial_bag_lbs / self.bag_size_lbs)
+            self.partial_bag_lbs -= bags_produced * self.bag_size_lbs
+            self.bags_completed += bags_produced
+
         return consumed
 
 
@@ -170,11 +173,13 @@ class PDG:
         # Direct from upstream
         from_upstream = min(remaining_demand, upstream_mass_lbs)
         
-        # Distribute to baggers
+        # Distribute to baggers proportionally
         total_available = from_acc + from_upstream
+        remaining = total_available
         for bagger in self.baggers:
-            bagger_demand = bagger.demand_lbs_per_sec() * dt_sec
-            bagger.produce(total_available, dt_sec)
+            bagger_share = min(bagger.demand_lbs_per_sec() * dt_sec, remaining)
+            bagger.produce(bagger_share, dt_sec)
+            remaining -= bagger_share
         
         return from_acc + from_upstream, from_upstream
 
@@ -316,12 +321,12 @@ class ProductionLineSimulator:
         singulator_output_mass, fruits = self._singulate(singulator_input, dt_sec)
         self.recycle_buffer_mass_lbs = 0.0
         
-        # 4. Lane buffers & classification
-        recycle_mass = self._process_lanes(fruits, dt_sec)
+        # 4. Lane buffers & classification, route to accumulators
+        recycle_mass, classified_fruits = self._process_lanes(fruits, dt_sec)
         self.recycle_buffer_mass_lbs = recycle_mass
-        
-        # 5. Route fruits and compute accumulator fills
-        self._route_fruits_to_accumulators(dt_sec)
+
+        # 5. Route classified pack fruit to accumulators
+        self._route_fruits_to_accumulators(classified_fruits)
         
         # 6. PDGs consume from accumulators
         self._pdg_production(singulator_output_mass, dt_sec)
@@ -387,20 +392,20 @@ class ProductionLineSimulator:
         
         return output_mass, fruits
     
-    def _process_lanes(self, fruits: List[Fruit], dt_sec: float) -> float:
-        """Scan lanes, classify fruit, return recycle mass"""
+    def _process_lanes(self, fruits: List[Fruit], dt_sec: float) -> Tuple[float, List[Fruit]]:
+        """Scan lanes, classify fruit, return (recycle_mass, classified_fruits)"""
         recycle_mass = 0.0
         classified_fruits = []
-        
+
         for lane in self.lanes:
             classified, lane_recycle = lane.scan_and_classify(dt_sec)
             classified_fruits.extend(classified)
             recycle_mass += lane_recycle
-        
+
         # Assign grades (simplified: classify based on rate)
         for i, fruit in enumerate(classified_fruits):
             rand_val = (i * 0.618) % 1.0  # Golden ratio quasi-random
-            
+
             if rand_val < self.pack_rate:
                 fruit.grade = FruitGrade.PACK
             elif rand_val < self.pack_rate + self.recycle_rate:
@@ -408,33 +413,34 @@ class ProductionLineSimulator:
                 recycle_mass += fruit.weight_lbs
             else:
                 fruit.grade = FruitGrade.JUICE
-        
-        return recycle_mass
-    
-    def _route_fruits_to_accumulators(self, dt_sec: float) -> None:
-        """Route classified fruit to accumulators or waste"""
-        for lane in self.lanes:
-            for fruit in lane.buffer[:]:  # Copy list
-                if fruit.grade == FruitGrade.PACK:
-                    # Round-robin to accumulators
-                    acc_id = fruit.lane_id % len(self.accumulators)
-                    self.accumulators[acc_id].fill(fruit.weight_lbs)
-                    self.pack_lbs += fruit.weight_lbs
-                elif fruit.grade == FruitGrade.JUICE:
-                    self.juice_lbs += fruit.weight_lbs
+
+        return recycle_mass, classified_fruits
+
+    def _route_fruits_to_accumulators(self, classified_fruits: List[Fruit]) -> None:
+        """Route classified fruit to accumulators or juice"""
+        for fruit in classified_fruits:
+            if fruit.grade == FruitGrade.PACK:
+                acc_id = fruit.lane_id % len(self.accumulators)
+                self.accumulators[acc_id].fill(fruit.weight_lbs)
+                self.pack_lbs += fruit.weight_lbs
+            elif fruit.grade == FruitGrade.JUICE:
+                self.juice_lbs += fruit.weight_lbs
     
     def _pdg_production(self, upstream_available_lbs: float, dt_sec: float) -> None:
         """PDGs produce bags, draw from accumulators"""
         remaining_upstream = upstream_available_lbs
-        
+
         for pdg in self.pdgs:
+            # Snapshot bags before production
+            prev_bags = {b.bagger_id: b.bags_completed for b in pdg.baggers}
+
             consumed, from_upstream = pdg.produce(remaining_upstream, dt_sec)
             remaining_upstream -= from_upstream
-            
-            # Track production
+
+            # Track only NEW production this step
             for bagger in pdg.baggers:
-                bags = bagger.bags_completed
-                self.total_lbs_produced += bags * bagger.bag_size_lbs
+                new_bags = bagger.bags_completed - prev_bags[bagger.bagger_id]
+                self.total_lbs_produced += new_bags * bagger.bag_size_lbs
     
     # ========================================================================
     # EXTERNAL CONTROL
