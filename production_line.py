@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, Dict, Optional
 from enum import Enum
 import json
+import random
 
 
 # ============================================================================
@@ -198,6 +199,9 @@ class ProductionLineSimulator:
         self.bins_completed = 0
         self.bin_dump_rate_lbs_per_sec = 50.0
         self.manual_bin_speed_pct = 100.0
+        self.auto_bin_enabled = True  # Auto-load next bin when current is consumed
+        self.bin_weight_min = 600.0
+        self.bin_weight_max = 900.0
         
         # Bulk flow components
         self.metering_belt = BulkFlowComponent(
@@ -329,25 +333,29 @@ class ProductionLineSimulator:
         self.current_time_sec += dt_sec
     
     def _dump_bin(self, dt_sec: float) -> float:
-        """Dump active bin at rate, return mass dumped"""
+        """Dump active bin at rate, return mass dumped. Auto-loads next bin when empty."""
         if self.active_bin is None:
-            return 0.0
-        
+            if self.auto_bin_enabled:
+                weight = random.uniform(self.bin_weight_min, self.bin_weight_max)
+                self.active_bin = Bin(weight)
+            else:
+                return 0.0
+
         dump_rate = self.bin_dump_rate_lbs_per_sec * \
                     (self.manual_bin_speed_pct / 100.0) * \
                     self.upstream_speed_multiplier
-        
+
         mass_dumped = min(
             dump_rate * dt_sec,
             self.active_bin.remaining_weight_lbs
         )
-        
+
         self.active_bin.remaining_weight_lbs -= mass_dumped
-        
+
         if self.active_bin.remaining_weight_lbs <= 0:
             self.bins_completed += 1
             self.active_bin = None
-        
+
         self.bin_mass_history.append((self.current_time_sec, mass_dumped))
         return mass_dumped
     

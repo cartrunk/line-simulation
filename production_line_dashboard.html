@@ -294,6 +294,137 @@
         .timeline-item.event {
             color: #4da6ff;
         }
+
+        /* Fruit Path Visualization */
+        .flow-diagram {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            overflow-x: auto;
+            padding: 20px 10px;
+            position: relative;
+        }
+
+        .flow-node {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 90px;
+            flex-shrink: 0;
+        }
+
+        .flow-box {
+            background: #0f1428;
+            border: 2px solid #2d3561;
+            border-radius: 8px;
+            padding: 10px 12px;
+            text-align: center;
+            font-size: 0.8em;
+            min-width: 80px;
+            position: relative;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+
+        .flow-box.active-flow {
+            border-color: #4da6ff;
+            box-shadow: 0 0 10px rgba(77, 166, 255, 0.3);
+        }
+
+        .flow-box .flow-label {
+            font-weight: 600;
+            color: #e8eaed;
+            font-size: 0.85em;
+            margin-bottom: 4px;
+        }
+
+        .flow-box .flow-rate {
+            color: #4da6ff;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .flow-box .flow-icon {
+            font-size: 1.4em;
+            margin-bottom: 4px;
+        }
+
+        .flow-arrow {
+            display: flex;
+            align-items: center;
+            color: #2d3561;
+            font-size: 1.2em;
+            min-width: 30px;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: color 0.3s;
+        }
+
+        .flow-arrow.active-flow {
+            color: #4da6ff;
+        }
+
+        .flow-branch {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .flow-branch-label {
+            font-size: 0.7em;
+            color: #888;
+            white-space: nowrap;
+        }
+
+        .flow-split {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .flow-split-row {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .flow-side-box {
+            background: #0f1428;
+            border: 1px solid #2d3561;
+            border-radius: 6px;
+            padding: 6px 8px;
+            text-align: center;
+            font-size: 0.7em;
+            min-width: 60px;
+        }
+
+        .flow-side-box.juice {
+            border-color: #ff8c42;
+        }
+
+        .flow-side-box.recycle {
+            border-color: #a855f7;
+        }
+
+        .flow-side-box .flow-rate {
+            color: #ff8c42;
+            font-weight: bold;
+        }
+
+        .flow-side-box.recycle .flow-rate {
+            color: #a855f7;
+        }
+
+        .flow-recycle-line {
+            position: absolute;
+            bottom: -30px;
+            left: 50%;
+            width: 2px;
+            height: 20px;
+            background: #a855f7;
+            opacity: 0.5;
+        }
     </style>
 </head>
 <body>
@@ -339,9 +470,14 @@
             <!-- Bin Management -->
             <div class="card">
                 <h2><span class="card-icon">📦</span> Bin Management</h2>
-                
+
                 <div class="control-group">
-                    <label class="control-label">Load Bin (lbs)</label>
+                    <label class="control-label">Auto Bin Loading</label>
+                    <button id="autoBinBtn" onclick="toggleAutoBin()">Auto: ON</button>
+                </div>
+
+                <div class="control-group">
+                    <label class="control-label">Manual Load Bin (lbs)</label>
                     <input type="number" id="binWeight" value="750" min="600" max="900">
                     <button onclick="loadNewBin()">Load Bin</button>
                 </div>
@@ -389,6 +525,116 @@
             <div class="card" id="accumulatorCards"></div>
         </div>
         
+        <!-- FRUIT PATH VISUALIZATION -->
+        <div class="card">
+            <h2><span class="card-icon">🔄</span> Fruit Path</h2>
+            <div class="flow-diagram" id="flowDiagram">
+                <div class="flow-node">
+                    <div class="flow-box" id="fp-bin">
+                        <div class="flow-icon">📦</div>
+                        <div class="flow-label">Bin</div>
+                        <div class="flow-rate" id="fp-bin-rate">0 lbs</div>
+                    </div>
+                </div>
+                <div class="flow-arrow" id="fa-1">&#9654;</div>
+                <div class="flow-node">
+                    <div class="flow-box" id="fp-metering">
+                        <div class="flow-icon">⚙️</div>
+                        <div class="flow-label">Metering</div>
+                        <div class="flow-rate" id="fp-metering-rate">0/s</div>
+                    </div>
+                </div>
+                <div class="flow-arrow" id="fa-2">&#9654;</div>
+                <div class="flow-node">
+                    <div class="flow-box" id="fp-unstack">
+                        <div class="flow-icon">🔄</div>
+                        <div class="flow-label">Unstack</div>
+                        <div class="flow-rate" id="fp-unstack-rate">0/s</div>
+                    </div>
+                </div>
+                <div class="flow-arrow" id="fa-3">&#9654;</div>
+                <div class="flow-node">
+                    <div class="flow-split">
+                        <div class="flow-box" id="fp-grade">
+                            <div class="flow-icon">🔍</div>
+                            <div class="flow-label">Grade Table</div>
+                            <div class="flow-rate" id="fp-grade-rate">0/s</div>
+                        </div>
+                        <div class="flow-split-row">
+                            <div class="flow-side-box juice">
+                                <div>Juice 15%</div>
+                                <div class="flow-rate" id="fp-grade-juice">0 lbs</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="flow-arrow" id="fa-4">&#9654;</div>
+                <div class="flow-node">
+                    <div class="flow-box" id="fp-wash">
+                        <div class="flow-icon">💧</div>
+                        <div class="flow-label">Wash/Dry/Wax</div>
+                        <div class="flow-rate" id="fp-wash-rate">0/s</div>
+                    </div>
+                </div>
+                <div class="flow-arrow" id="fa-5">&#9654;</div>
+                <div class="flow-node">
+                    <div class="flow-split">
+                        <div class="flow-box" id="fp-singulator">
+                            <div class="flow-icon">🍊</div>
+                            <div class="flow-label">Singulator</div>
+                            <div class="flow-rate" id="fp-singulator-rate">0 f/s</div>
+                        </div>
+                        <div class="flow-split-row">
+                            <div class="flow-side-box recycle">
+                                <div>Recycle 10%</div>
+                                <div class="flow-rate" id="fp-recycle-mass">0 lbs</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="flow-arrow" id="fa-6">&#9654;</div>
+                <div class="flow-node">
+                    <div class="flow-split">
+                        <div class="flow-box" id="fp-camera">
+                            <div class="flow-icon">📷</div>
+                            <div class="flow-label">Camera</div>
+                            <div class="flow-rate" id="fp-camera-rate">10 lanes</div>
+                        </div>
+                        <div class="flow-split-row">
+                            <div class="flow-side-box juice">
+                                <div>Juice 10%</div>
+                                <div class="flow-rate" id="fp-cam-juice">0 lbs</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="flow-arrow" id="fa-7">&#9654;</div>
+                <div class="flow-node">
+                    <div class="flow-box" id="fp-accum">
+                        <div class="flow-icon">🏗️</div>
+                        <div class="flow-label">Accumulators</div>
+                        <div class="flow-rate" id="fp-accum-rate">0%</div>
+                    </div>
+                </div>
+                <div class="flow-arrow" id="fa-8">&#9654;</div>
+                <div class="flow-node">
+                    <div class="flow-box" id="fp-pdg">
+                        <div class="flow-icon">👜</div>
+                        <div class="flow-label">PDG/Baggers</div>
+                        <div class="flow-rate" id="fp-pdg-rate">0/s</div>
+                    </div>
+                </div>
+                <div class="flow-arrow" id="fa-9">&#9654;</div>
+                <div class="flow-node">
+                    <div class="flow-box" id="fp-output">
+                        <div class="flow-icon">📦</div>
+                        <div class="flow-label">Cases/Pallets</div>
+                        <div class="flow-rate" id="fp-output-rate">0 lbs</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- BAGGER CONTROLS -->
         <div class="card">
             <h2><span class="card-icon">👜</span> Bagger Controls & Status</h2>
@@ -554,6 +800,9 @@
                 this.bins_completed = 0;
                 this.bin_dump_rate_lbs_per_sec = 50.0;
                 this.manual_bin_speed_pct = 100.0;
+                this.auto_bin_enabled = true;
+                this.bin_weight_min = 600.0;
+                this.bin_weight_max = 900.0;
                 
                 this.num_lanes = 10;
                 this.lanes = [];
@@ -586,7 +835,16 @@
                 this.total_lbs_produced = 0.0;
                 
                 this.upstream_speed_multiplier = 1.0;
-                
+
+                // Flow tracking for path visualization
+                this.last_bin_mass_dumped = 0.0;
+                this.last_metering_output = 0.0;
+                this.last_unstack_output = 0.0;
+                this.last_grade_output = 0.0;
+                this.last_wash_output = 0.0;
+                this.last_num_fruits = 0;
+                this.last_pdg_demand = 0.0;
+
                 this.history = {
                     time: [],
                     throughput: [],
@@ -615,25 +873,39 @@
             step(dt_sec) {
                 this.dt_sec = dt_sec;
                 
-                // Dump bin
+                // Dump bin (auto-load next when empty)
                 let bin_mass_dumped = 0.0;
+                if (!this.active_bin && this.auto_bin_enabled) {
+                    const weight = this.bin_weight_min + Math.random() * (this.bin_weight_max - this.bin_weight_min);
+                    this.active_bin = weight;
+                }
                 if (this.active_bin) {
                     const dump_rate = this.bin_dump_rate_lbs_per_sec *
                         (this.manual_bin_speed_pct / 100.0) *
                         this.upstream_speed_multiplier;
-                    
+
                     bin_mass_dumped = Math.min(dump_rate * dt_sec, this.active_bin);
                     this.active_bin -= bin_mass_dumped;
-                    
+
                     if (this.active_bin <= 0) {
                         this.bins_completed++;
                         this.active_bin = null;
                     }
                 }
                 
-                // Simple flow through components (no delay/yield for MVP)
-                const metering_output = bin_mass_dumped;
-                const singulator_input = metering_output + this.recycle_buffer_mass_lbs;
+                // Flow through bulk components (with yield losses)
+                const metering_output = Math.min(bin_mass_dumped, 50.0 * dt_sec);
+                const unstack_output = Math.min(metering_output, 60.0 * dt_sec);
+                const grade_output = Math.min(unstack_output, 100.0 * dt_sec) * 0.85; // 15% juice loss
+                const wash_output = Math.min(grade_output, 80.0 * dt_sec) * 0.95;     // 5% waste loss
+                const singulator_input = wash_output + this.recycle_buffer_mass_lbs;
+
+                // Track for path visualization
+                this.last_bin_mass_dumped = bin_mass_dumped;
+                this.last_metering_output = metering_output;
+                this.last_unstack_output = unstack_output;
+                this.last_grade_output = grade_output;
+                this.last_wash_output = wash_output;
                 
                 // Singulate
                 let num_fruits = 0;
@@ -664,7 +936,8 @@
                 }
                 
                 this.recycle_buffer_mass_lbs = recycle_mass;
-                
+                this.last_num_fruits = num_fruits;
+
                 // Route to accumulators
                 for (let i = 0; i < num_fruits; i++) {
                     if ((i * 0.618) % 1.0 < this.pack_rate) {
@@ -674,11 +947,14 @@
                 }
                 
                 // Baggers produce
+                let total_pdg_demand = 0.0;
                 for (const bagger of this.baggers) {
                     const demand = bagger.demand_lbs_per_sec() * dt_sec;
+                    total_pdg_demand += bagger.demand_lbs_per_sec();
                     bagger.produce(demand, dt_sec);
                     this.total_lbs_produced += bagger.bags_completed * bagger.bag_size_lbs;
                 }
+                this.last_pdg_demand = total_pdg_demand;
                 
                 // Update control signal
                 this.update_control_signal();
@@ -768,12 +1044,27 @@
             }
             
             sim.history = { time: [], throughput: [], acc_fill: [] };
-            
+            sim.last_bin_mass_dumped = 0.0;
+            sim.last_metering_output = 0.0;
+            sim.last_unstack_output = 0.0;
+            sim.last_grade_output = 0.0;
+            sim.last_wash_output = 0.0;
+            sim.last_num_fruits = 0;
+            sim.last_pdg_demand = 0.0;
+
             simRunning = false;
             document.getElementById('playBtn').textContent = '▶️ Start';
             updateUI();
         }
         
+        function toggleAutoBin() {
+            sim.auto_bin_enabled = !sim.auto_bin_enabled;
+            const btn = document.getElementById('autoBinBtn');
+            btn.textContent = sim.auto_bin_enabled ? 'Auto: ON' : 'Auto: OFF';
+            btn.classList.toggle('active', sim.auto_bin_enabled);
+            btn.classList.toggle('inactive', !sim.auto_bin_enabled);
+        }
+
         function loadNewBin() {
             const weight = parseFloat(document.getElementById('binWeight').value) || 750;
             sim.load_bin(weight);
@@ -885,8 +1176,61 @@
             document.getElementById('totalOutput').textContent = 
                 state.total_lbs_produced.toFixed(1) + ' lbs';
             
+            // Flow path visualization
+            updateFlowPath();
+
             // Charts update
             updateCharts();
+        }
+
+        function updateFlowPath() {
+            const dt = sim.dt_sec || 0.1;
+            const isFlowing = sim.last_bin_mass_dumped > 0;
+
+            // Update rates on each node
+            document.getElementById('fp-bin-rate').textContent =
+                (sim.active_bin || 0).toFixed(0) + ' lbs';
+            document.getElementById('fp-metering-rate').textContent =
+                (sim.last_metering_output / dt).toFixed(1) + '/s';
+            document.getElementById('fp-unstack-rate').textContent =
+                (sim.last_unstack_output / dt).toFixed(1) + '/s';
+            document.getElementById('fp-grade-rate').textContent =
+                (sim.last_grade_output / dt).toFixed(1) + '/s';
+            document.getElementById('fp-grade-juice').textContent =
+                (sim.juice_lbs * 0.6).toFixed(0) + ' lbs'; // grade table juice portion
+            document.getElementById('fp-wash-rate').textContent =
+                (sim.last_wash_output / dt).toFixed(1) + '/s';
+            document.getElementById('fp-singulator-rate').textContent =
+                sim.last_num_fruits + ' f/s';
+            document.getElementById('fp-recycle-mass').textContent =
+                sim.recycle_buffer_mass_lbs.toFixed(1) + ' lbs';
+            document.getElementById('fp-camera-rate').textContent =
+                '10 lanes';
+            document.getElementById('fp-cam-juice').textContent =
+                (sim.juice_lbs * 0.4).toFixed(0) + ' lbs'; // camera juice portion
+
+            const avg_fill = sim.accumulators.reduce((s, a) => s + a.fill_pct(), 0) / 4;
+            document.getElementById('fp-accum-rate').textContent =
+                avg_fill.toFixed(0) + '% fill';
+            document.getElementById('fp-pdg-rate').textContent =
+                sim.last_pdg_demand.toFixed(1) + '/s';
+            document.getElementById('fp-output-rate').textContent =
+                sim.total_lbs_produced.toFixed(0) + ' lbs';
+
+            // Highlight active nodes and arrows
+            const flowNodes = ['fp-bin', 'fp-metering', 'fp-unstack', 'fp-grade',
+                             'fp-wash', 'fp-singulator', 'fp-camera', 'fp-accum',
+                             'fp-pdg', 'fp-output'];
+            const flowArrows = ['fa-1','fa-2','fa-3','fa-4','fa-5','fa-6','fa-7','fa-8','fa-9'];
+
+            for (const id of flowNodes) {
+                const el = document.getElementById(id);
+                if (el) el.classList.toggle('active-flow', isFlowing);
+            }
+            for (const id of flowArrows) {
+                const el = document.getElementById(id);
+                if (el) el.classList.toggle('active-flow', isFlowing);
+            }
         }
         
         function updateCharts() {
