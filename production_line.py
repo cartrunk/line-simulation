@@ -441,6 +441,10 @@ class ProductionLineSimulator:
             for bagger in pdg.baggers:
                 new_bags = bagger.bags_completed - prev_bags[bagger.bagger_id]
                 self.total_lbs_produced += new_bags * bagger.bag_size_lbs
+
+        # Cases and pallets from cumulative output
+        self.cases_completed = int(self.total_lbs_produced / self.case_size_lbs)
+        self.pallets_completed = self.cases_completed // self.pallet_size_cases
     
     # ========================================================================
     # EXTERNAL CONTROL
@@ -570,23 +574,187 @@ class Bin:
 
 
 # ============================================================================
-# EXAMPLE USAGE
+# LIVE TERMINAL DASHBOARD
 # ============================================================================
 
-if __name__ == "__main__":
+import curses
+import time
+
+
+def _bar(pct: float, width: int = 20) -> str:
+    """Render a horizontal bar: [████████░░░░░░░░░░░░] 45%"""
+    filled = int(pct / 100 * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _run_dashboard(stdscr) -> None:
+    """Curses main loop — live-updating production line display."""
+    curses.curs_set(0)
+    stdscr.nodelay(True)
+    stdscr.timeout(50)  # 50 ms refresh
+
+    # Colors
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(1, curses.COLOR_CYAN, -1)     # headings
+    curses.init_pair(2, curses.COLOR_GREEN, -1)     # good / active
+    curses.init_pair(3, curses.COLOR_YELLOW, -1)    # warning
+    curses.init_pair(4, curses.COLOR_RED, -1)       # critical
+    curses.init_pair(5, curses.COLOR_WHITE, -1)     # normal
+
     sim = ProductionLineSimulator()
-    
-    # Load bins and run
-    sim.load_bin(750.0)
     sim.set_control_mode(ControlMode.AUTO)
-    
-    # Run 10 seconds
-    for _ in range(100):
-        sim.step(0.1)
-    
-    # Print final state
-    print(json.dumps(sim.get_state(), indent=2))
-    print("\n" + "="*60)
-    print("METRICS")
-    print("="*60)
-    print(json.dumps(sim.get_metrics(), indent=2))
+
+    dt = 0.1
+    paused = False
+    sim_speed = 1  # steps per frame
+
+    while True:
+        key = stdscr.getch()
+        if key == ord('q'):
+            break
+        elif key == ord(' '):
+            paused = not paused
+        elif key == ord('+') or key == ord('='):
+            sim_speed = min(sim_speed + 1, 50)
+        elif key == ord('-'):
+            sim_speed = max(sim_speed - 1, 1)
+
+        if not paused:
+            for _ in range(sim_speed):
+                sim.step(dt)
+
+        state = sim.get_state()
+        metrics = sim.get_metrics()
+
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        row = 0
+
+        def put(r: int, c: int, text: str, attr=curses.A_NORMAL):
+            if 0 <= r < h and c < w:
+                stdscr.addnstr(r, c, text, w - c, attr)
+
+        # Title
+        title = "CITRUS PRODUCTION LINE SIMULATOR"
+        put(row, max(0, (w - len(title)) // 2), title,
+            curses.color_pair(1) | curses.A_BOLD)
+        row += 1
+        controls = "[SPACE] pause  [+/-] speed  [Q] quit"
+        put(row, max(0, (w - len(controls)) // 2), controls, curses.color_pair(5))
+        row += 2
+
+        # Status line
+        status = "PAUSED" if paused else "RUNNING"
+        status_color = curses.color_pair(3) if paused else curses.color_pair(2)
+        put(row, 0, f" Status: {status}   Speed: {sim_speed}x   "
+                     f"Time: {state['time_sec']:.1f}s   "
+                     f"Mode: {state['control_mode'].upper()}   "
+                     f"Multiplier: {state['upstream_speed_multiplier']:.2f}",
+            status_color | curses.A_BOLD)
+        row += 2
+
+        # ── BIN SECTION ──
+        put(row, 0, "─── BINS ─────────────────────────────────────────",
+            curses.color_pair(1))
+        row += 1
+        bin_info = state["active_bin"]
+        put(row, 0, f"  Active Bin:  {bin_info['remaining_lbs']:.0f} lbs remaining",
+            curses.color_pair(5))
+        put(row, 42, f"Bins Completed: {bin_info['total_bins_completed']}",
+            curses.color_pair(2) | curses.A_BOLD)
+        row += 1
+
+        total_bin_weight = bin_info['total_bins_completed'] * 750  # approx avg
+        put(row, 0, f"  Est. Total Bin Weight Dumped: ~{total_bin_weight:,.0f} lbs",
+            curses.color_pair(5))
+        row += 2
+
+        # ── ACCUMULATORS ──
+        put(row, 0, "─── ACCUMULATORS ─────────────────────────────────",
+            curses.color_pair(1))
+        row += 1
+        for acc in state["accumulators"]:
+            pct = acc["fill_pct"]
+            color = curses.color_pair(2)
+            if pct > 80:
+                color = curses.color_pair(4)
+            elif pct > 50:
+                color = curses.color_pair(3)
+            bar = _bar(pct)
+            put(row, 0, f"  Acc {acc['id']}: [{bar}] {pct:5.1f}%  "
+                         f"({acc['fill_lbs']:7.1f} / {acc['capacity_lbs']:.0f} lbs)", color)
+            row += 1
+        row += 1
+
+        # ── BAGGERS ──
+        put(row, 0, "─── BAGGERS (PDG x 2) ────────────────────────────",
+            curses.color_pair(1))
+        row += 1
+        for b in state["baggers"]:
+            status_str = "ON " if b["active"] else "OFF"
+            color = curses.color_pair(2) if b["active"] else curses.color_pair(4)
+            put(row, 0,
+                f"  B{b['id']} (PDG{b['pdg']}, {b['bag_size']}lb) "
+                f"[{status_str}] "
+                f"Speed:{b['speed_pct']:5.0f}%  "
+                f"Bags:{b['bags_completed']:6d}  "
+                f"Demand:{b['demand_lbs_sec']:.2f}/s", color)
+            row += 1
+        row += 1
+
+        # ── PRODUCTION OUTPUT ──
+        put(row, 0, "─── PRODUCTION ───────────────────────────────────",
+            curses.color_pair(1))
+        row += 1
+        out = state["output"]
+        streams = state["streams"]
+        put(row, 0, f"  Total Produced: {out['total_lbs_produced']:>10.1f} lbs",
+            curses.color_pair(2) | curses.A_BOLD)
+        row += 1
+        put(row, 0, f"  Pack Stream:    {streams['pack_lbs']:>10.1f} lbs     "
+                     f"Juice Stream: {streams['juice_lbs']:.1f} lbs",
+            curses.color_pair(5))
+        row += 1
+        put(row, 0, f"  Cases (30 lbs): {out['cases_completed']:>10d}         "
+                     f"Pallets (60 cases): {out['pallets_completed']}",
+            curses.color_pair(2) | curses.A_BOLD)
+        row += 1
+        put(row, 0, f"  Throughput:     {metrics['throughput_lbs_per_hour']:>10.0f} lbs/hr   "
+                     f"Bagger Util: {metrics['avg_bagger_utilization_pct']:.1f}%",
+            curses.color_pair(3) | curses.A_BOLD)
+        row += 2
+
+        # ── LANES ──
+        put(row, 0, "─── SINGULATOR LANES ─────────────────────────────",
+            curses.color_pair(1))
+        row += 1
+        lane_strs = []
+        for l in state["lanes"]:
+            lane_strs.append(f"L{l['id']}:{l['utilization_pct']:4.0f}%")
+        put(row, 0, "  " + "  ".join(lane_strs), curses.color_pair(5))
+        row += 2
+
+        # ── FRUIT PATH ──
+        put(row, 0, "─── FRUIT PATH ───────────────────────────────────",
+            curses.color_pair(1))
+        row += 1
+        path_color = curses.color_pair(2) if not paused else curses.color_pair(5)
+        put(row, 0,
+            "  Bin → Metering → Unstack → Grade(-15%juice) → Wash/Dry/Wax",
+            path_color)
+        row += 1
+        put(row, 0,
+            "    → Singulator(10 lanes) → Camera(-10%recycle,-10%juice)",
+            path_color)
+        row += 1
+        put(row, 0,
+            "    → Accumulators(4) → PDGs(4) → Baggers(8) → Cases → Pallets",
+            path_color)
+
+        stdscr.refresh()
+        time.sleep(0.05)
+
+
+if __name__ == "__main__":
+    curses.wrapper(_run_dashboard)
