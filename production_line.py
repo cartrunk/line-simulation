@@ -8,8 +8,8 @@ from typing import List, Tuple, Dict, Optional
 from enum import Enum
 import json
 import random
-import curses
-import time
+import tkinter as tk
+from tkinter import ttk
 
 
 # ============================================================================
@@ -126,6 +126,19 @@ class Bagger:
     active: bool = True
     bags_completed: int = 0
     partial_bag_lbs: float = 0.0  # Tracks sub-bag accumulation
+    _prev_bags: int = 0  # For rate calculation
+    _rate_bags_per_min: float = 0.0
+
+    def update_rate(self, dt_sec: float) -> None:
+        """Update measured bags/min from recent production"""
+        new_bags = self.bags_completed - self._prev_bags
+        if dt_sec > 0:
+            self._rate_bags_per_min = (new_bags / dt_sec) * 60.0
+        self._prev_bags = self.bags_completed
+
+    @property
+    def bags_per_min(self) -> float:
+        return self._rate_bags_per_min
 
     def demand_lbs_per_sec(self) -> float:
         """Current demand based on speed"""
@@ -450,6 +463,11 @@ class ProductionLineSimulator:
                 new_bags = bagger.bags_completed - prev_bags[bagger.bagger_id]
                 self.total_lbs_produced += new_bags * bagger.bag_size_lbs
 
+        # Update bagger rate measurements
+        for pdg in self.pdgs:
+            for bagger in pdg.baggers:
+                bagger.update_rate(dt_sec)
+
         # Cases and pallets from cumulative output
         self.cases_completed = int(self.total_lbs_produced / self.case_size_lbs)
         self.pallets_completed = self.cases_completed // self.pallet_size_cases
@@ -515,6 +533,7 @@ class ProductionLineSimulator:
                     "active": b.active,
                     "speed_pct": round(b.manual_speed_pct, 1),
                     "bags_completed": b.bags_completed,
+                    "bags_per_min": round(b.bags_per_min, 1),
                     "demand_lbs_sec": round(b.demand_lbs_per_sec(), 3)
                 }
                 for pdg in self.pdgs
@@ -582,183 +601,463 @@ class Bin:
 
 
 # ============================================================================
-# LIVE TERMINAL DASHBOARD
+# TKINTER GUI DASHBOARD & CONTROLLER
 # ============================================================================
 
-def _bar(pct: float, width: int = 20) -> str:
-    """Render a horizontal bar: [████████░░░░░░░░░░░░] 45%"""
-    filled = int(pct / 100 * width)
-    return "█" * filled + "░" * (width - filled)
+class SimulatorGUI:
+    """Tkinter GUI for live simulation display and interactive control."""
 
+    BG = "#0a0e27"
+    CARD_BG = "#1a1f3a"
+    INPUT_BG = "#0f1428"
+    BORDER = "#2d3561"
+    TEXT = "#e8eaed"
+    ACCENT = "#4da6ff"
+    GREEN = "#2d7a2d"
+    YELLOW = "#cc9933"
+    RED = "#cc3333"
+    MUTED = "#888888"
 
-def _run_dashboard(stdscr) -> None:
-    """Curses main loop — live-updating production line display."""
-    curses.curs_set(0)
-    stdscr.nodelay(True)
-    stdscr.timeout(50)  # 50 ms refresh
+    def __init__(self) -> None:
+        self.sim = ProductionLineSimulator()
+        self.sim.set_control_mode(ControlMode.AUTO)
+        self.dt = 0.1
+        self.running = False
+        self.sim_speed = 1
 
-    # Colors
-    curses.start_color()
-    curses.use_default_colors()
-    curses.init_pair(1, curses.COLOR_CYAN, -1)     # headings
-    curses.init_pair(2, curses.COLOR_GREEN, -1)     # good / active
-    curses.init_pair(3, curses.COLOR_YELLOW, -1)    # warning
-    curses.init_pair(4, curses.COLOR_RED, -1)       # critical
-    curses.init_pair(5, curses.COLOR_WHITE, -1)     # normal
+        self.root = tk.Tk()
+        self.root.title("Citrus Production Line Simulator")
+        self.root.configure(bg=self.BG)
+        self.root.geometry("1100x820")
 
-    sim = ProductionLineSimulator()
-    sim.set_control_mode(ControlMode.AUTO)
+        self._build_ui()
+        self._tick()
+        self.root.mainloop()
 
-    dt = 0.1
-    paused = False
-    sim_speed = 1  # steps per frame
+    # ── UI CONSTRUCTION ─────────────────────────────────────────────────
 
-    while True:
-        key = stdscr.getch()
-        if key == ord('q'):
-            break
-        elif key == ord(' '):
-            paused = not paused
-        elif key == ord('+') or key == ord('='):
-            sim_speed = min(sim_speed + 1, 50)
-        elif key == ord('-'):
-            sim_speed = max(sim_speed - 1, 1)
-
-        if not paused:
-            for _ in range(sim_speed):
-                sim.step(dt)
-
-        state = sim.get_state()
-        metrics = sim.get_metrics()
-
-        stdscr.erase()
-        h, w = stdscr.getmaxyx()
-        row = 0
-
-        def put(r: int, c: int, text: str, attr=curses.A_NORMAL):
-            if 0 <= r < h and c < w:
-                stdscr.addnstr(r, c, text, w - c, attr)
+    def _build_ui(self) -> None:
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("TLabel", background=self.CARD_BG, foreground=self.TEXT,
+                         font=("Consolas", 9))
+        style.configure("Head.TLabel", foreground=self.ACCENT,
+                         font=("Consolas", 10, "bold"))
+        style.configure("Big.TLabel", foreground=self.ACCENT,
+                         font=("Consolas", 13, "bold"))
+        style.configure("TFrame", background=self.CARD_BG)
+        style.configure("Dark.TFrame", background=self.BG)
+        style.configure("TButton", font=("Consolas", 9))
+        style.configure("TScale", background=self.CARD_BG)
 
         # Title
-        title = "CITRUS PRODUCTION LINE SIMULATOR"
-        put(row, max(0, (w - len(title)) // 2), title,
-            curses.color_pair(1) | curses.A_BOLD)
-        row += 1
-        controls = "[SPACE] pause  [+/-] speed  [Q] quit"
-        put(row, max(0, (w - len(controls)) // 2), controls, curses.color_pair(5))
-        row += 2
+        title = tk.Label(self.root, text="CITRUS PRODUCTION LINE SIMULATOR",
+                          bg=self.BG, fg=self.ACCENT,
+                          font=("Consolas", 16, "bold"))
+        title.pack(pady=(10, 5))
 
-        # Status line
-        status = "PAUSED" if paused else "RUNNING"
-        status_color = curses.color_pair(3) if paused else curses.color_pair(2)
-        put(row, 0, f" Status: {status}   Speed: {sim_speed}x   "
-                     f"Time: {state['time_sec']:.1f}s   "
-                     f"Mode: {state['control_mode'].upper()}   "
+        # Main paned layout: left=controls, right=display
+        main = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, bg=self.BG,
+                               sashwidth=4, bd=0)
+        main.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        left = tk.Frame(main, bg=self.BG, width=340)
+        right = tk.Frame(main, bg=self.BG)
+        main.add(left, minsize=300)
+        main.add(right, minsize=500)
+
+        self._build_controls(left)
+        self._build_display(right)
+
+    def _card(self, parent, title_text: str) -> tk.Frame:
+        """Create a styled card frame with title."""
+        card = tk.Frame(parent, bg=self.CARD_BG, bd=1,
+                         highlightbackground=self.BORDER, highlightthickness=1)
+        card.pack(fill=tk.X, padx=5, pady=4)
+        lbl = tk.Label(card, text=title_text, bg=self.CARD_BG, fg=self.ACCENT,
+                        font=("Consolas", 10, "bold"), anchor="w")
+        lbl.pack(fill=tk.X, padx=8, pady=(6, 2))
+        body = tk.Frame(card, bg=self.CARD_BG)
+        body.pack(fill=tk.X, padx=8, pady=(0, 8))
+        return body
+
+    # ── LEFT PANEL: CONTROLS ────────────────────────────────────────────
+
+    def _build_controls(self, parent) -> None:
+        # Simulation controls
+        body = self._card(parent, "Simulation")
+        btn_row = tk.Frame(body, bg=self.CARD_BG)
+        btn_row.pack(fill=tk.X, pady=2)
+
+        self.play_btn = tk.Button(btn_row, text="Start", width=8,
+                                   bg=self.ACCENT, fg=self.BG,
+                                   font=("Consolas", 9, "bold"),
+                                   command=self._toggle_run)
+        self.play_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        tk.Button(btn_row, text="Reset", width=8,
+                  bg="#4a4a4a", fg=self.TEXT,
+                  font=("Consolas", 9),
+                  command=self._reset).pack(side=tk.LEFT)
+
+        spd_row = tk.Frame(body, bg=self.CARD_BG)
+        spd_row.pack(fill=tk.X, pady=4)
+        tk.Label(spd_row, text="Speed:", bg=self.CARD_BG, fg=self.MUTED,
+                 font=("Consolas", 9)).pack(side=tk.LEFT)
+        self.speed_var = tk.IntVar(value=1)
+        self.speed_scale = tk.Scale(spd_row, from_=1, to=50,
+                                     orient=tk.HORIZONTAL,
+                                     variable=self.speed_var,
+                                     bg=self.CARD_BG, fg=self.TEXT,
+                                     highlightbackground=self.CARD_BG,
+                                     troughcolor=self.INPUT_BG,
+                                     font=("Consolas", 8),
+                                     showvalue=True, length=180)
+        self.speed_scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Control mode
+        body = self._card(parent, "Control Mode")
+        self.mode_var = tk.StringVar(value="auto")
+        for val, label in [("auto", "AUTO (Accumulator)"), ("manual", "MANUAL")]:
+            tk.Radiobutton(body, text=label, variable=self.mode_var, value=val,
+                           bg=self.CARD_BG, fg=self.TEXT,
+                           selectcolor=self.INPUT_BG,
+                           activebackground=self.CARD_BG,
+                           activeforeground=self.TEXT,
+                           font=("Consolas", 9),
+                           command=self._set_mode).pack(anchor="w")
+
+        # Bin controls
+        body = self._card(parent, "Bin Management")
+        self.auto_bin_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(body, text="Auto Bin Loading",
+                        variable=self.auto_bin_var,
+                        bg=self.CARD_BG, fg=self.TEXT,
+                        selectcolor=self.INPUT_BG,
+                        activebackground=self.CARD_BG,
+                        font=("Consolas", 9),
+                        command=self._toggle_auto_bin).pack(anchor="w")
+
+        bin_row = tk.Frame(body, bg=self.CARD_BG)
+        bin_row.pack(fill=tk.X, pady=4)
+        tk.Label(bin_row, text="Manual bin (lbs):", bg=self.CARD_BG,
+                 fg=self.MUTED, font=("Consolas", 9)).pack(side=tk.LEFT)
+        self.bin_weight_entry = tk.Entry(bin_row, width=6, bg=self.INPUT_BG,
+                                          fg=self.TEXT, insertbackground=self.TEXT,
+                                          font=("Consolas", 9))
+        self.bin_weight_entry.insert(0, "750")
+        self.bin_weight_entry.pack(side=tk.LEFT, padx=4)
+        tk.Button(bin_row, text="Load", bg="#4a4a4a", fg=self.TEXT,
+                  font=("Consolas", 9),
+                  command=self._load_bin).pack(side=tk.LEFT)
+
+        spd = tk.Frame(body, bg=self.CARD_BG)
+        spd.pack(fill=tk.X, pady=2)
+        tk.Label(spd, text="Dump Speed:", bg=self.CARD_BG, fg=self.MUTED,
+                 font=("Consolas", 9)).pack(side=tk.LEFT)
+        self.bin_speed_var = tk.IntVar(value=100)
+        self.bin_speed_lbl = tk.Label(spd, text="100%", bg=self.CARD_BG,
+                                       fg=self.TEXT, font=("Consolas", 9))
+        self.bin_speed_lbl.pack(side=tk.RIGHT)
+        tk.Scale(spd, from_=0, to=100, orient=tk.HORIZONTAL,
+                 variable=self.bin_speed_var,
+                 bg=self.CARD_BG, fg=self.TEXT,
+                 highlightbackground=self.CARD_BG,
+                 troughcolor=self.INPUT_BG,
+                 font=("Consolas", 8),
+                 showvalue=False, length=140,
+                 command=self._set_bin_speed).pack(side=tk.LEFT,
+                                                    fill=tk.X, expand=True)
+
+        # Bagger controls
+        body = self._card(parent, "Bagger Controls")
+        self.bagger_frames = []
+        self.bagger_speed_vars = []
+        self.bagger_active_vars = []
+        self.bagger_toggle_btns = []
+        bag_sizes = [1, 2, 3, 5]
+
+        for i in range(8):
+            pdg_id = i // 2
+            row = tk.Frame(body, bg=self.INPUT_BG, bd=1,
+                            highlightbackground=self.BORDER,
+                            highlightthickness=1)
+            row.pack(fill=tk.X, pady=1)
+
+            tk.Label(row, text=f"B{i} ({bag_sizes[pdg_id]}lb)",
+                     bg=self.INPUT_BG, fg=self.TEXT,
+                     font=("Consolas", 8), width=8).pack(side=tk.LEFT, padx=2)
+
+            spd_var = tk.IntVar(value=100)
+            self.bagger_speed_vars.append(spd_var)
+            tk.Scale(row, from_=0, to=100, orient=tk.HORIZONTAL,
+                     variable=spd_var, bg=self.INPUT_BG, fg=self.TEXT,
+                     highlightbackground=self.INPUT_BG,
+                     troughcolor=self.CARD_BG,
+                     font=("Consolas", 7),
+                     showvalue=False, length=100,
+                     command=lambda v, idx=i: self._set_bagger_speed(idx, v)
+                     ).pack(side=tk.LEFT)
+
+            act_var = tk.BooleanVar(value=True)
+            self.bagger_active_vars.append(act_var)
+            btn = tk.Button(row, text="ON", width=4,
+                             bg=self.GREEN, fg=self.TEXT,
+                             font=("Consolas", 8, "bold"),
+                             command=lambda idx=i: self._toggle_bagger(idx))
+            btn.pack(side=tk.RIGHT, padx=2)
+            self.bagger_toggle_btns.append(btn)
+
+            self.bagger_frames.append(row)
+
+    # ── RIGHT PANEL: LIVE DISPLAY ───────────────────────────────────────
+
+    def _build_display(self, parent) -> None:
+        # Status bar
+        self.status_lbl = tk.Label(parent, text="STOPPED", bg=self.BG,
+                                    fg=self.YELLOW,
+                                    font=("Consolas", 10, "bold"),
+                                    anchor="w")
+        self.status_lbl.pack(fill=tk.X, padx=5, pady=(0, 4))
+
+        # Scrollable canvas for display sections
+        canvas = tk.Canvas(parent, bg=self.BG, highlightthickness=0)
+        scrollbar = tk.Scrollbar(parent, orient=tk.VERTICAL,
+                                  command=canvas.yview)
+        self.display_frame = tk.Frame(canvas, bg=self.BG)
+
+        self.display_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=self.display_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Bind mousewheel
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        # Build display sections
+        self._build_bin_display()
+        self._build_acc_display()
+        self._build_bagger_display()
+        self._build_production_display()
+        self._build_lane_display()
+        self._build_path_display()
+
+    def _section(self, title_text: str) -> tk.Frame:
+        """Add a display section to the right panel."""
+        frm = tk.Frame(self.display_frame, bg=self.CARD_BG, bd=1,
+                        highlightbackground=self.BORDER,
+                        highlightthickness=1)
+        frm.pack(fill=tk.X, padx=5, pady=3)
+        tk.Label(frm, text=title_text, bg=self.CARD_BG, fg=self.ACCENT,
+                 font=("Consolas", 10, "bold"), anchor="w").pack(
+            fill=tk.X, padx=8, pady=(6, 2))
+        body = tk.Frame(frm, bg=self.CARD_BG)
+        body.pack(fill=tk.X, padx=8, pady=(0, 8))
+        return body
+
+    def _build_bin_display(self) -> None:
+        body = self._section("BINS")
+        self.bin_lbl = tk.Label(body, text="", bg=self.CARD_BG, fg=self.TEXT,
+                                 font=("Consolas", 9), anchor="w")
+        self.bin_lbl.pack(fill=tk.X)
+
+    def _build_acc_display(self) -> None:
+        body = self._section("ACCUMULATORS")
+        self.acc_bars = []
+        self.acc_lbls = []
+        for i in range(4):
+            row = tk.Frame(body, bg=self.CARD_BG)
+            row.pack(fill=tk.X, pady=1)
+            lbl = tk.Label(row, text=f"Acc {i}:", bg=self.CARD_BG,
+                            fg=self.TEXT, font=("Consolas", 9), width=6,
+                            anchor="w")
+            lbl.pack(side=tk.LEFT)
+            bar_bg = tk.Frame(row, bg=self.INPUT_BG, height=16, width=200)
+            bar_bg.pack(side=tk.LEFT, padx=4)
+            bar_bg.pack_propagate(False)
+            bar_fill = tk.Frame(bar_bg, bg=self.ACCENT, height=16)
+            bar_fill.place(x=0, y=0, relheight=1.0, relwidth=0.0)
+            info = tk.Label(row, text="  0.0%   0/3600 lbs", bg=self.CARD_BG,
+                             fg=self.MUTED, font=("Consolas", 9), anchor="w")
+            info.pack(side=tk.LEFT, padx=4)
+            self.acc_bars.append(bar_fill)
+            self.acc_lbls.append(info)
+
+    def _build_bagger_display(self) -> None:
+        body = self._section("BAGGERS (PDG x 2)")
+        self.bagger_lbls = []
+        for i in range(8):
+            lbl = tk.Label(body, text="", bg=self.CARD_BG, fg=self.TEXT,
+                            font=("Consolas", 9), anchor="w")
+            lbl.pack(fill=tk.X)
+            self.bagger_lbls.append(lbl)
+
+    def _build_production_display(self) -> None:
+        body = self._section("PRODUCTION")
+        self.prod_lbl = tk.Label(body, text="", bg=self.CARD_BG, fg=self.TEXT,
+                                  font=("Consolas", 9), anchor="w",
+                                  justify=tk.LEFT)
+        self.prod_lbl.pack(fill=tk.X)
+
+    def _build_lane_display(self) -> None:
+        body = self._section("SINGULATOR LANES")
+        self.lane_lbl = tk.Label(body, text="", bg=self.CARD_BG, fg=self.TEXT,
+                                  font=("Consolas", 9), anchor="w")
+        self.lane_lbl.pack(fill=tk.X)
+
+    def _build_path_display(self) -> None:
+        body = self._section("FRUIT PATH")
+        path = (
+            "Bin > Metering > Unstack > Grade(-15%juice) > Wash/Dry/Wax\n"
+            "  > Singulator(10 lanes) > Camera(-10%recycle,-10%juice)\n"
+            "  > Accumulators(4) > PDGs(4) > Baggers(8) > Cases > Pallets"
+        )
+        tk.Label(body, text=path, bg=self.CARD_BG, fg=self.GREEN,
+                 font=("Consolas", 9), anchor="w",
+                 justify=tk.LEFT).pack(fill=tk.X)
+
+    # ── CONTROL CALLBACKS ───────────────────────────────────────────────
+
+    def _toggle_run(self) -> None:
+        self.running = not self.running
+        self.play_btn.config(
+            text="Pause" if self.running else "Start",
+            bg=self.YELLOW if self.running else self.ACCENT
+        )
+
+    def _reset(self) -> None:
+        self.running = False
+        self.play_btn.config(text="Start", bg=self.ACCENT)
+        self.sim = ProductionLineSimulator()
+        self.sim.set_control_mode(
+            ControlMode.AUTO if self.mode_var.get() == "auto"
+            else ControlMode.MANUAL
+        )
+        self._update_display()
+
+    def _set_mode(self) -> None:
+        mode = ControlMode.AUTO if self.mode_var.get() == "auto" \
+            else ControlMode.MANUAL
+        self.sim.set_control_mode(mode)
+
+    def _toggle_auto_bin(self) -> None:
+        self.sim.auto_bin_enabled = self.auto_bin_var.get()
+
+    def _load_bin(self) -> None:
+        try:
+            w = float(self.bin_weight_entry.get())
+        except ValueError:
+            w = 750.0
+        self.sim.load_bin(w)
+
+    def _set_bin_speed(self, val) -> None:
+        v = int(float(val))
+        self.sim.set_bin_speed(v)
+        self.bin_speed_lbl.config(text=f"{v}%")
+
+    def _set_bagger_speed(self, idx: int, val) -> None:
+        v = int(float(val))
+        self.sim.set_bagger_speed(idx, v)
+
+    def _toggle_bagger(self, idx: int) -> None:
+        cur = self.bagger_active_vars[idx].get()
+        new_val = not cur
+        self.bagger_active_vars[idx].set(new_val)
+        self.sim.toggle_bagger(idx, new_val)
+        btn = self.bagger_toggle_btns[idx]
+        btn.config(text="ON" if new_val else "OFF",
+                   bg=self.GREEN if new_val else "#4a4a4a")
+
+    # ── SIMULATION LOOP ─────────────────────────────────────────────────
+
+    def _tick(self) -> None:
+        if self.running:
+            self.sim_speed = self.speed_var.get()
+            for _ in range(self.sim_speed):
+                self.sim.step(self.dt)
+        self._update_display()
+        self.root.after(50, self._tick)
+
+    def _update_display(self) -> None:
+        state = self.sim.get_state()
+        metrics = self.sim.get_metrics()
+
+        # Status bar
+        if self.running:
+            self.status_lbl.config(
+                text=f"  RUNNING  |  Speed: {self.speed_var.get()}x  |  "
+                     f"Time: {state['time_sec']:.1f}s  |  "
+                     f"Mode: {state['control_mode'].upper()}  |  "
                      f"Multiplier: {state['upstream_speed_multiplier']:.2f}",
-            status_color | curses.A_BOLD)
-        row += 2
+                fg=self.GREEN)
+        else:
+            self.status_lbl.config(
+                text=f"  STOPPED  |  Time: {state['time_sec']:.1f}s  |  "
+                     f"Mode: {state['control_mode'].upper()}",
+                fg=self.YELLOW)
 
-        # ── BIN SECTION ──
-        put(row, 0, "─── BINS ─────────────────────────────────────────",
-            curses.color_pair(1))
-        row += 1
-        bin_info = state["active_bin"]
-        put(row, 0, f"  Active Bin:  {bin_info['remaining_lbs']:.0f} lbs remaining",
-            curses.color_pair(5))
-        put(row, 42, f"Bins Completed: {bin_info['total_bins_completed']}",
-            curses.color_pair(2) | curses.A_BOLD)
-        row += 1
+        # Bins
+        bi = state["active_bin"]
+        self.bin_lbl.config(
+            text=f"Active Bin: {bi['remaining_lbs']:.0f} lbs remaining    "
+                 f"Bins Completed: {bi['total_bins_completed']}"
+        )
 
-        total_bin_weight = bin_info['total_bins_completed'] * 750  # approx avg
-        put(row, 0, f"  Est. Total Bin Weight Dumped: ~{total_bin_weight:,.0f} lbs",
-            curses.color_pair(5))
-        row += 2
-
-        # ── ACCUMULATORS ──
-        put(row, 0, "─── ACCUMULATORS ─────────────────────────────────",
-            curses.color_pair(1))
-        row += 1
-        for acc in state["accumulators"]:
+        # Accumulators
+        for i, acc in enumerate(state["accumulators"]):
             pct = acc["fill_pct"]
-            color = curses.color_pair(2)
+            frac = max(0.0, min(1.0, pct / 100.0))
+            self.acc_bars[i].place(x=0, y=0, relheight=1.0, relwidth=frac)
             if pct > 80:
-                color = curses.color_pair(4)
+                self.acc_bars[i].config(bg=self.RED)
             elif pct > 50:
-                color = curses.color_pair(3)
-            bar = _bar(pct)
-            put(row, 0, f"  Acc {acc['id']}: [{bar}] {pct:5.1f}%  "
-                         f"({acc['fill_lbs']:7.1f} / {acc['capacity_lbs']:.0f} lbs)", color)
-            row += 1
-        row += 1
+                self.acc_bars[i].config(bg=self.YELLOW)
+            else:
+                self.acc_bars[i].config(bg=self.ACCENT)
+            self.acc_lbls[i].config(
+                text=f"  {pct:5.1f}%   {acc['fill_lbs']:.0f}/{acc['capacity_lbs']:.0f} lbs"
+            )
 
-        # ── BAGGERS ──
-        put(row, 0, "─── BAGGERS (PDG x 2) ────────────────────────────",
-            curses.color_pair(1))
-        row += 1
-        for b in state["baggers"]:
-            status_str = "ON " if b["active"] else "OFF"
-            color = curses.color_pair(2) if b["active"] else curses.color_pair(4)
-            put(row, 0,
-                f"  B{b['id']} (PDG{b['pdg']}, {b['bag_size']}lb) "
-                f"[{status_str}] "
-                f"Speed:{b['speed_pct']:5.0f}%  "
-                f"Bags:{b['bags_completed']:6d}  "
-                f"Demand:{b['demand_lbs_sec']:.2f}/s", color)
-            row += 1
-        row += 1
+        # Baggers
+        bag_sizes = [1, 2, 3, 5]
+        for i, b in enumerate(state["baggers"]):
+            pdg_id = b["pdg"]
+            on_str = "ON " if b["active"] else "OFF"
+            self.bagger_lbls[i].config(
+                text=f"B{b['id']} (PDG{pdg_id}, {b['bag_size']:.0f}lb) "
+                     f"[{on_str}] "
+                     f"Spd:{b['speed_pct']:3.0f}%  "
+                     f"Rate:{b['bags_per_min']:5.1f} bags/min  "
+                     f"Bags:{b['bags_completed']:6d}",
+                fg=self.GREEN if b["active"] else self.RED
+            )
 
-        # ── PRODUCTION OUTPUT ──
-        put(row, 0, "─── PRODUCTION ───────────────────────────────────",
-            curses.color_pair(1))
-        row += 1
+        # Production
         out = state["output"]
         streams = state["streams"]
-        put(row, 0, f"  Total Produced: {out['total_lbs_produced']:>10.1f} lbs",
-            curses.color_pair(2) | curses.A_BOLD)
-        row += 1
-        put(row, 0, f"  Pack Stream:    {streams['pack_lbs']:>10.1f} lbs     "
-                     f"Juice Stream: {streams['juice_lbs']:.1f} lbs",
-            curses.color_pair(5))
-        row += 1
-        put(row, 0, f"  Cases (30 lbs): {out['cases_completed']:>10d}         "
-                     f"Pallets (60 cases): {out['pallets_completed']}",
-            curses.color_pair(2) | curses.A_BOLD)
-        row += 1
-        put(row, 0, f"  Throughput:     {metrics['throughput_lbs_per_hour']:>10.0f} lbs/hr   "
-                     f"Bagger Util: {metrics['avg_bagger_utilization_pct']:.1f}%",
-            curses.color_pair(3) | curses.A_BOLD)
-        row += 2
+        self.prod_lbl.config(
+            text=f"Total Produced: {out['total_lbs_produced']:.1f} lbs\n"
+                 f"Pack Stream:    {streams['pack_lbs']:.1f} lbs     "
+                 f"Juice Stream: {streams['juice_lbs']:.1f} lbs\n"
+                 f"Cases (30 lbs): {out['cases_completed']}         "
+                 f"Pallets (60 cases): {out['pallets_completed']}\n"
+                 f"Throughput:     {metrics['throughput_lbs_per_hour']:.0f} lbs/hr   "
+                 f"Bagger Util: {metrics['avg_bagger_utilization_pct']:.1f}%"
+        )
 
-        # ── LANES ──
-        put(row, 0, "─── SINGULATOR LANES ─────────────────────────────",
-            curses.color_pair(1))
-        row += 1
-        lane_strs = []
-        for l in state["lanes"]:
-            lane_strs.append(f"L{l['id']}:{l['utilization_pct']:4.0f}%")
-        put(row, 0, "  " + "  ".join(lane_strs), curses.color_pair(5))
-        row += 2
-
-        # ── FRUIT PATH ──
-        put(row, 0, "─── FRUIT PATH ───────────────────────────────────",
-            curses.color_pair(1))
-        row += 1
-        path_color = curses.color_pair(2) if not paused else curses.color_pair(5)
-        put(row, 0,
-            "  Bin → Metering → Unstack → Grade(-15%juice) → Wash/Dry/Wax",
-            path_color)
-        row += 1
-        put(row, 0,
-            "    → Singulator(10 lanes) → Camera(-10%recycle,-10%juice)",
-            path_color)
-        row += 1
-        put(row, 0,
-            "    → Accumulators(4) → PDGs(4) → Baggers(8) → Cases → Pallets",
-            path_color)
-
-        stdscr.refresh()
-        time.sleep(0.05)
+        # Lanes
+        parts = [f"L{l['id']}:{l['utilization_pct']:3.0f}%"
+                 for l in state["lanes"]]
+        self.lane_lbl.config(text="  ".join(parts))
 
 
 if __name__ == "__main__":
-    curses.wrapper(_run_dashboard)
+    SimulatorGUI()
