@@ -8,6 +8,8 @@ from typing import List, Tuple, Dict, Optional
 from enum import Enum
 import json
 import random
+import curses
+import time
 
 
 # ============================================================================
@@ -576,10 +578,6 @@ class Bin:
 # ============================================================================
 # LIVE TERMINAL DASHBOARD
 # ============================================================================
-
-import curses
-import time
-
 
 def _bar(pct: float, width: int = 20) -> str:
     """Render a horizontal bar: [████████░░░░░░░░░░░░] 45%"""
