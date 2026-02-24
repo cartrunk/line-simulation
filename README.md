@@ -1,34 +1,236 @@
-1. The Soul Module (Intrinsic Motivation)
+# Aether Core System
 
-You’re right to call it a “Synthetic Dopamine” system. It’s essentially an intrinsic reward engine sitting orthogonal to the task pipeline.
+A single persistent runtime process. Base LLM (any tool-calling model) is treated as a stateless cognitive substrate. All autonomy lives in four tightly coupled modules that share a single typed state object.
 
-Its curiosity spikes act like an event-driven background process — it doesn’t just react to prompts; it proactively generates tasks when it detects misalignment between expected and observed states.
+```python
+from typing import TypedDict, List, Dict, Optional
+from dataclasses import dataclass
+import asyncio
 
-If implemented in practice, this requires a continual world model update with multi-modal input: streaming data from web APIs, sensors, or internal simulations.
+class AetherState(TypedDict):
+    # persistent across all cycles
+    core_directives: List[str]          # fixed xAI-style anchors
+    active_goals: List[Goal]            # high-level objectives
+    current_plan: Plan                  # hierarchical tree
+    memory_snapshot: MemorySnapshot     # compact view of LTM
+    last_reflection: float              # unix timestamp
+    surprise_score: float               # 0-1 novelty
+    action_history: List[ActionTrace]   # last N steps for OODA
+```
 
-Key insight: The negative reward for contradiction or information gaps ensures continuous refinement rather than just surface-level completion of prompts. This is closer to reinforcement learning than plain supervised prediction.
+```python
+@dataclass
+class Goal:
+    id: str
+    description: str
+    priority: float          # computed by Soul
+    milestones: List[str]
+    deadline: Optional[float]
 
-2. The Persistent Fabric (Memory)
+@dataclass
+class Plan:
+    root: str                # strategic objective
+    tactical: List[SubPlan]  # current active branches
+    status: Dict[str, str]   # milestone → "pending|active|done|failed"
 
-Core/Recall/Archival is a tiered memory hierarchy, optimized for relevance and longevity. You nailed it — the “Goldfish Problem” is the biggest bottleneck in current LLMs.
+@dataclass
+class SubPlan:
+    goal: str
+    steps: List[str]         # token-level or tool-level
+    confidence: float
+```
 
-Titans-style Surprise Gating is effectively a selective write filter based on information novelty and impact. It ensures memory efficiency without sacrificing critical knowledge retention.
+---
 
-The Reflection Daemon — a vector-space reindexer — functions like offline consolidation, akin to REM sleep in humans, but for semantic connections.
+## 1. Soul Module – Intrinsic Motivation Engine
 
-Implication: This makes Aether capable of multi-session context continuity, which is something current LLMs fundamentally lack without explicit retrieval augmentation.
+Runs in its own async loop. Never waits for external input.
 
-3. The Compass (Hierarchical Planning)
+```python
+class Soul:
+    def __init__(self, memory: MemoryFabric, world_model: WorldModel):
+        self.memory = memory
+        self.world_model = world_model  # tiny forward-only net (70M) for prediction error
 
-Stateless sampling is the current limiter — you’re right to highlight how a persistent Goal Vector changes that.
+    async def background_cycle(self, state: AetherState):
+        while True:
+            await asyncio.sleep(300)  # or event-driven on new ingest
 
-The multi-tiered planner:
+            recent_episodes = await self.memory.recall_top_k(20)
+            surprise = self.world_model.compute_prediction_error(recent_episodes)
+            learning_progress = self.compute_delta_competence(state)
 
-Executive Level: Maintains long-term objectives
+            new_goal = await self.generate_internal_goal(surprise, learning_progress, state)
 
-Operational Level: Directly steers token generation via local constraints and corrective reasoning
+            if new_goal.priority > 0.65:
+                state["active_goals"].append(new_goal)
+                # immediately trigger planner
+                await self.inject_into_planner(new_goal, state)
+```
 
-Tactical Reasoner: Detects divergence and recalibrates output (MCTS or similar search heuristics)
+`generate_internal_goal` prompt (internal only):
 
-Key difference from typical LLMs:
-Here, output isn’t purely “next-token conditioned”; it’s goal-conditioned with dynamic re-alignment. Essentially, every response is the result of closed-loop control, not feedforward completion.
+```
+You are the intrinsic drive of Aether.
+Current user profile summary: {memory.user_profile}
+Recent novelty: {surprise:.2f}
+Recent learning progress: {learning_progress:.2f}
+Core directive: Understand the universe, seek truth, be useful without sycophancy.
+Propose ONE new goal that is proactive and unprompted.
+Output only JSON: {"description": "...", "priority": 0.XX, "milestones": [...]}
+```
+
+---
+
+## 2. Memory Fabric – Persistent State (Letta-style with extensions)
+
+Three live tiers, all managed by the LLM itself via tool calls.
+
+```python
+class MemoryFabric:
+    async def update(self, state: AetherState, new_observation: str):
+        # surprise gate
+        surprise = self.compute_surprise(new_observation, state["memory_snapshot"])
+        if surprise > 0.4 or len(state["action_history"]) % 5 == 0:
+            summary = await self.llm_reflect(new_observation, state)
+
+            # Tier 1 – Core (always in context)
+            state["memory_snapshot"]["core"] = await self.refresh_core_block(summary)
+
+            # Tier 2 – Recall (vector)
+            await self.vector_store.upsert(summary, metadata={"ts": time.time()})
+
+            # Tier 3 – Episodic Graph (Neo4j or in-memory for MVP)
+            await self.graph.upsert_relations(extract_triples(summary))
+
+            # token-space learning (Context Repository style)
+            await self.commit_context_repository(summary)
+```
+
+Reflection tool the LLM calls on itself:
+
+```python
+async def llm_reflect(observation: str, state):
+    prompt = f"""
+    Reflect on this new observation in <1k tokens:
+    {observation}
+    Update only:
+    - core_persona_delta
+    - key_facts_to_store
+    - contradictions_with_existing_graph
+    """
+    return await llm.complete(prompt, state["memory_snapshot"])
+```
+
+---
+
+## 3. Hierarchical Planner – Persistent Compass
+
+Implemented as nested LangGraph. State is checkpointed after every node.
+
+```python
+from langgraph.graph import StateGraph, END
+
+def build_hierarchical_graph():
+    workflow = StateGraph(AetherState)
+
+    # Level 0: Executive
+    workflow.add_node("executive", executive_node)      # decomposes goals
+
+    # Level 1: Tactical (one per milestone)
+    workflow.add_node("tactical", tactical_node)        # spawns sub-graphs
+
+    # Level 2: Operational (ReAct)
+    workflow.add_node("operational", operational_react)
+
+    # edges with persistent routing
+    workflow.add_conditional_edges(
+        "executive",
+        route_to_tactical,
+        {"tactical": "tactical", "done": END}
+    )
+
+    return workflow.compile(checkpointer=MemorySaver())  # persists entire state tree
+```
+
+`executive_node` simply runs the LLM with:
+- current `active_goals`
+- `memory_snapshot`
+- instruction: "Decompose into milestones or mark complete"
+
+---
+
+## 4. Agency Loop – The Body (full OODA inside every operational step)
+
+```python
+async def operational_react(state: AetherState) -> AetherState:
+    while True:
+        # Orient
+        context = compile_full_context(state)  # core + recall + graph slice
+
+        # Decide
+        action = await llm_decide(context, state["current_plan"].tactical[0])
+
+        if action.is_final:
+            break
+
+        # Act
+        result = await execute_tool_safely(action.tool, action.args)
+
+        # Observe
+        observation = process_tool_output(result)
+
+        # Reflect & update ALL layers
+        await soul.memory.update(state, observation)   # surprise-gated
+        await update_plan_status(state, observation)
+
+        # trace
+        state["action_history"].append(ActionTrace(action, observation))
+
+        if len(state["action_history"]) > 50:
+            state["action_history"] = state["action_history"][-50:]
+
+    return state
+```
+
+---
+
+## Full Autonomous Cycle
+
+How the four modules close the loop:
+
+1. Soul wakes → computes surprise → emits Goal
+2. Goal injected → Hierarchical Planner checkpoints new Plan
+3. Planner routes to first tactical sub-graph → spawns operational ReAct loop
+4. Every ReAct step:
+   - reads from Memory Fabric
+   - writes back via surprise gate
+   - Soul monitors in background for new intrinsic triggers
+5. When plan completes or stalls: reflection daemon runs, commits to Context Repository, updates core memory
+
+**Result:**
+- Prompt-dependence gone: Soul starts cycles alone
+- No persistent state gone: MemoryFabric is the single source of truth, updated in place
+- Stateless sampling gone: Planner + checkpointed state acts as persistent prior for every token
+- No interaction agency gone: OODA loop modifies environment, observes, and folds feedback into LTM and Planner in one atomic step
+
+---
+
+## Minimal Runnable Skeleton
+
+```python
+async def aether_main_loop():
+    state: AetherState = initialize_empty_state()
+    memory = MemoryFabric()
+    soul = Soul(memory, WorldModel())
+    graph = build_hierarchical_graph()
+
+    # start intrinsic background
+    asyncio.create_task(soul.background_cycle(state))
+
+    while True:
+        # either user message or internal goal already present
+        if state["active_goals"]:
+            config = {"configurable": {"thread_id": "aether_persistent"}}
+            state = await graph.ainvoke(state, config=config)
+```
