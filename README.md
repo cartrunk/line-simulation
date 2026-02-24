@@ -2,6 +2,56 @@
 
 A single persistent runtime process. Base LLM (any tool-calling model) is treated as a stateless cognitive substrate. All autonomy lives in four tightly coupled modules that share a single typed state object.
 
+---
+
+## LLM Backend – Local LM Studio
+
+Aether uses a local LM Studio instance as its cognitive substrate. LM Studio exposes an OpenAI-compatible REST API, so the standard `openai` Python client works with no additional dependencies.
+
+```python
+from openai import AsyncOpenAI
+
+# LM Studio default endpoint
+llm = AsyncOpenAI(
+    base_url="http://127.0.0.1:1234/v1",
+    api_key="lm-studio",  # required by client but not validated locally
+)
+
+# model name must match whatever is loaded in LM Studio
+LLM_MODEL = "local-model"  # replace with your loaded model's identifier
+```
+
+All `llm.complete(...)` calls throughout Aether map to:
+
+```python
+async def llm_complete(prompt: str, context: dict = None) -> str:
+    messages = []
+    if context:
+        messages.append({"role": "system", "content": str(context)})
+    messages.append({"role": "user", "content": prompt})
+
+    response = await llm.chat.completions.create(
+        model=LLM_MODEL,
+        messages=messages,
+    )
+    return response.choices[0].message.content
+```
+
+For tool-calling nodes (operational ReAct loop), pass `tools=` to the same client:
+
+```python
+response = await llm.chat.completions.create(
+    model=LLM_MODEL,
+    messages=messages,
+    tools=tool_schemas,      # OpenAI-format tool definitions
+    tool_choice="auto",
+)
+```
+
+> **Note:** Tool calling requires a model that supports it (e.g. a fine-tuned instruct model with function-calling capability). Check LM Studio's model card before enabling.
+
+---
+
 ```python
 from typing import TypedDict, List, Dict, Optional
 from dataclasses import dataclass
