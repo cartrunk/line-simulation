@@ -1,12 +1,11 @@
 from __future__ import annotations
 import asyncio
-import json
 from typing import Callable, Awaitable, Optional
 
 from .config import SOUL_CYCLE_SECONDS, GOAL_PRIORITY_THRESHOLD
 from .types import AetherState, Goal
 from .memory import MemoryFabric
-from .llm import llm_complete
+from .llm import llm_complete, extract_json
 
 
 class Soul:
@@ -40,8 +39,7 @@ class Soul:
             f'Output ONLY valid JSON: {{"description": "...", "priority": 0.XX, "milestones": ["...", "..."]}}'
         )
         raw = await llm_complete(prompt)
-        raw = raw.strip().strip("```json").strip("```").strip()
-        data = json.loads(raw)
+        data = extract_json(raw)
         return Goal(
             description=data["description"],
             priority=float(data["priority"]),

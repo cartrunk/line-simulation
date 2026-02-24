@@ -1,4 +1,6 @@
 from __future__ import annotations
+import json
+import re
 from typing import Any, Dict, List, Optional
 
 from openai import AsyncOpenAI
@@ -37,6 +39,43 @@ async def llm_tool_call(
         tool_choice="auto",
     )
     return response.choices[0].message
+
+
+def extract_json(raw: str) -> dict:
+    """
+    Robustly extract the first JSON object from raw LLM output.
+    Handles markdown fences, leading prose, trailing text, and empty responses.
+    Raises json.JSONDecodeError if no valid JSON object is found.
+    """
+    if not raw or not raw.strip():
+        raise json.JSONDecodeError("Empty response from LLM", "", 0)
+
+    # Strip markdown code fences (```json ... ``` or ``` ... ```)
+    text = re.sub(r"```(?:json)?\s*", "", raw)
+    text = re.sub(r"```", "", text).strip()
+
+    # Try parsing the whole cleaned string first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Fall back: find first balanced {...} block
+    start = text.find("{")
+    if start != -1:
+        depth = 0
+        for i, ch in enumerate(text[start:], start):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start : i + 1])
+                    except json.JSONDecodeError:
+                        break
+
+    raise json.JSONDecodeError("No valid JSON object found in LLM response", raw, 0)
 
 
 async def ping() -> bool:

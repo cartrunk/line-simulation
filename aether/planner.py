@@ -1,11 +1,10 @@
 from __future__ import annotations
-import json
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from .types import AetherState, Plan, SubPlan
-from .llm import llm_complete
+from .llm import llm_complete, extract_json
 
 
 # ---------------------------------------------------------------------------
@@ -34,8 +33,11 @@ async def executive_node(state: AetherState) -> AetherState:
         f"}}"
     )
     raw = await llm_complete(prompt)
-    raw = raw.strip().strip("```json").strip("```").strip()
-    data = json.loads(raw)
+    try:
+        data = extract_json(raw)
+    except Exception as exc:
+        print(f"[executive] JSON parse failed: {exc}\nRaw: {raw[:200]}")
+        return state
 
     state["current_plan"] = Plan(
         root=data["root"],
@@ -63,8 +65,11 @@ async def tactical_node(state: AetherState) -> AetherState:
         f'Output ONLY valid JSON: {{"steps": ["step1", "step2"], "confidence": 0.XX}}'
     )
     raw = await llm_complete(prompt)
-    raw = raw.strip().strip("```json").strip("```").strip()
-    data = json.loads(raw)
+    try:
+        data = extract_json(raw)
+    except Exception as exc:
+        print(f"[tactical] JSON parse failed: {exc}\nRaw: {raw[:200]}")
+        return state
 
     state["current_plan"].tactical[0].steps = data["steps"]
     state["current_plan"].tactical[0].confidence = float(data["confidence"])

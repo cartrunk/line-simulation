@@ -1,13 +1,12 @@
 from __future__ import annotations
 import asyncio
-import json
 import time
 
 from .types import AetherState, Plan, Goal
 from .memory import MemoryFabric
 from .soul import Soul
 from .planner import build_planner
-from .llm import ping, llm_complete
+from .llm import ping, llm_complete, extract_json
 
 
 # ---------------------------------------------------------------------------
@@ -52,8 +51,12 @@ async def handle_user_input(
         f'  {{"is_task": true, "goal": "...", "priority": 0.XX, "milestones": ["..."]}}'
     )
     raw = await llm_complete(prompt)
-    raw = raw.strip().strip("```json").strip("```").strip()
-    data = json.loads(raw)
+
+    try:
+        data = extract_json(raw)
+    except Exception:
+        # Model returned plain text instead of JSON — treat it as a direct answer
+        return f"[Aether] {raw.strip()}" if raw.strip() else "[Aether] (no response)"
 
     if data.get("is_task"):
         goal = Goal(
@@ -64,7 +67,7 @@ async def handle_user_input(
         state["active_goals"].append(goal)
         return f"[Aether] Goal accepted: {goal.description}"
 
-    return f"[Aether] {data.get('answer', '(no answer)')}"
+    return f"[Aether] {data.get('answer', raw.strip())}"
 
 
 # ---------------------------------------------------------------------------
